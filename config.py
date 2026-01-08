@@ -1,30 +1,42 @@
 # -*- coding: utf-8 -*-
 # FILE: config.py
-# Cấu hình chuẩn Logic V2.2 (Hỗ trợ Presets & Fixed Lot)
 
 # === 1. KẾT NỐI & HỆ THỐNG ===
-SYMBOL = "BTCUSD"           # Cặp tiền trade (Ví dụ: BTCUSDm, XAUUSD...)
-MAGIC_NUMBER = 8888         # Định danh lệnh của Bot
-LOOP_SLEEP_SECONDS = 1      # Tốc độ cập nhật (giây)
+# Danh sách các đồng coin muốn trade (Hiện trên Menu)
+COIN_LIST = [
+    "BTCUSDm", 
+    "ETHUSDm", 
+    "XAUUSDm",
+    "BTCUSD", 
+    "ETHUSD"
+]
+DEFAULT_SYMBOL = "BTCUSDm"      # Coin mặc định khi mở App
+SYMBOL = DEFAULT_SYMBOL         # Biến nội bộ (Bot tự dùng, không cần sửa)
+
+MAGIC_NUMBER = 8888             # Định danh lệnh của Bot
+LOOP_SLEEP_SECONDS = 1          # Tốc độ cập nhật (giây)
+
+# === CẤU HÌNH AN TOÀN (STRICT MODE - MỚI) ===
+STRICT_MODE_DEFAULT = True      # Mặc định bật chế độ an toàn (True/False)
+MAX_PING_MS = 150               # Ping > 150ms là báo Lag (FAIL)
+MAX_SPREAD_POINTS = 50          # Spread > 50 point là báo Cao (FAIL)
 
 # === 2. QUẢN LÝ VỐN (QUAN TRỌNG) ===
-# Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
-LOT_SIZE_MODE = "FIXED"     
+LOT_SIZE_MODE = "DYNAMIC"       # Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
 
 # Cấu hình cho mode FIXED
-FIXED_LOT_VOLUME = 0.01     # Nếu mode FIXED: Luôn đi 0.01 lot
+FIXED_LOT_VOLUME = 0.01         # Nếu mode FIXED: Luôn đi 0.01 lot
 
 # Cấu hình cho mode DYNAMIC (Logic V2 gốc)
-RISK_PER_TRADE_PERCENT = 0.30  # Mất tối đa 0.3% vốn/lệnh
-RISK_PER_TRADE_USD = 10.0      # (Dự phòng) Mất tối đa 10$/lệnh nếu tính theo USD
+RISK_PER_TRADE_PERCENT = 0.30   # Mất tối đa 0.3% vốn/lệnh
+RISK_PER_TRADE_USD = 10.0       # (Dự phòng) Mất tối đa 10$/lệnh nếu tính theo USD
 
 # === 3. KỶ LUẬT & KILL SWITCH ===
-MAX_DAILY_LOSS_PERCENT = 1.5   # Lỗ quá 1.5% ngày -> KHÓA APP
-MAX_LOSING_STREAK = 3          # Thua 3 lệnh thông -> KHÓA APP
-MAX_TRADES_PER_DAY = 15        # Giới hạn số lệnh/ngày
+MAX_DAILY_LOSS_PERCENT = 1.5    # Lỗ quá 1.5% ngày -> KHÓA APP
+MAX_LOSING_STREAK = 3           # Thua 3 lệnh thông -> KHÓA APP
+MAX_TRADES_PER_DAY = 15         # Giới hạn số lệnh/ngày
 
 # === 4. CÁC GÓI CHIẾN LƯỢC (PRESETS) ===
-# Định nghĩa các kiểu đánh để chọn nhanh trên UI
 DEFAULT_PRESET = "SCALPING"
 
 PRESETS = {
@@ -33,7 +45,7 @@ PRESETS = {
         "SL_PERCENT": 0.4,         # SL các entry 0.4%
         "TP_RR_RATIO": 1.5,        # TP = 1.5 lần SL (R:R 1:1.5)
         "BE_TRIGGER_RR": 0.8,      # Lãi 0.8R -> Dời SL về Entry (Hòa vốn)
-        "TRAILING_STEP_RR": 0.5,   # (MỚI) Khi giá chạy thêm 0.5R thì dời SL theo
+        "TRAILING_STEP_RR": 0.5,   # Khi giá chạy thêm 0.5R thì dời SL theo
     },
     "SAFE": {
         "DESC": "An toàn, SL xa hơn, Giữ vốn",
