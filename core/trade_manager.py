@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
+# Logic V2.2: Hỗ trợ Preset & Staircase Trailing Stop
 
 import logging
 import config
 from core.storage_manager import load_state, save_state
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
+import math
 
 # Setup logger
 logger = logging.getLogger("ExnessBot")
@@ -16,61 +18,72 @@ class TradeManager:
         self.checklist = checklist_manager
         self.state = load_state()
 
-    def execute_manual_trade(self, direction):
+    def execute_manual_trade(self, direction, preset_name="SCALPING"):
         """
         Hàm xử lý khi bấm nút LONG/SHORT.
+        Nhận thêm tham số preset_name từ UI.
         """
-        # 1. Chạy lại Checklist lần cuối (Double Check an toàn)
+        # 1. Chạy lại Checklist lần cuối
         acc_info = self.connector.get_account_info()
         res = self.checklist.run_pre_trade_checks(acc_info, self.state)
         if not res["passed"]:
             return "CHECKLIST_FAIL"
 
-        # 2. Lấy giá thị trường hiện tại
+        # 2. Lấy thông số từ Preset đã chọn
+        # Nếu không tìm thấy, dùng default SCALPING
+        params = config.PRESETS.get(preset_name, config.PRESETS["SCALPING"])
+        
         symbol = config.SYMBOL
         tick = mt5.symbol_info_tick(symbol)
         if not tick: return "ERR_NO_TICK"
         
         price = tick.ask if direction == "BUY" else tick.bid
         
-        # 3. TÍNH TOÁN QUẢN LÝ VỐN (Risk Management)
+        # 3. TÍNH TOÁN SL/TP & VOLUME
         equity = acc_info['equity']
         
         # A. Tính khoảng cách SL (Distance)
-        # Mặc định dùng mode PERCENT (SL = 0.4% giá)
-        sl_percent = config.PRESET_SCALPING_FAST["SL_PERCENT"] / 100.0
+        # Lấy % từ Preset (Ví dụ 0.4%)
+        sl_percent = params["SL_PERCENT"] / 100.0
         sl_distance = price * sl_percent
-        
-        # B. Tính Lot Size dựa trên Risk ($)
-        if config.RISK_MODE == "PERCENT":
-            risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
-        else:
-            risk_usd = config.RISK_PER_TRADE_USD
-            
-        # Lấy Contract Size (BTC thường là 1, Forex là 100000)
-        sym_info = mt5.symbol_info(symbol)
-        contract_size = sym_info.trade_contract_size if sym_info else 1.0
         
         if sl_distance == 0: return "ERR_CALC_SL"
         
-        # Công thức Vàng: Lot = Tiền_Rủi_Ro / (Khoảng_Cách_SL * Contract_Size)
-        raw_lot = risk_usd / (sl_distance * contract_size)
+        # Lấy Contract Size
+        sym_info = mt5.symbol_info(symbol)
+        contract_size = sym_info.trade_contract_size if sym_info else 1.0
+
+        # B. Tính Lot Size (Theo Mode FIXED hoặc DYNAMIC)
+        lot_size = 0.0
         
-        # C. Kẹp Lot Size theo giới hạn sàn
-        # V2.1 RULE: Nếu Lot tính ra nhỏ hơn Min Lot -> HỦY LỆNH.
-        # (Nghĩa là vốn quá nhỏ hoặc SL quá xa, vào lệnh sẽ bị rủi ro > 0.3%)
-        if raw_lot < config.MIN_LOT_SIZE:
-            print(f"[RISK GUARD] Lot tính ra {raw_lot:.4f} < Min {config.MIN_LOT_SIZE}. HỦY LỆNH để bảo vệ vốn.")
-            return "ERR_LOT_TOO_SMALL"
+        if config.LOT_SIZE_MODE == "FIXED":
+            # Mode đánh đều tay (dễ test)
+            lot_size = config.FIXED_LOT_VOLUME
+        else:
+            # Mode quản lý vốn chuyên nghiệp (Logic V2 gốc)
+            if config.RISK_MODE == "PERCENT":
+                risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
+            else:
+                risk_usd = config.RISK_PER_TRADE_USD
             
-        # Làm tròn lot theo bước nhảy (Step) của sàn
-        steps = round(raw_lot / config.LOT_STEP)
-        lot_size = steps * config.LOT_STEP
-        # Đảm bảo không vượt Max
+            # Công thức: Lot = Risk / (Distance * Contract)
+            raw_lot = risk_usd / (sl_distance * contract_size)
+            
+            # [Risk Guard] Nếu vốn quá nhỏ so với SL -> Hủy
+            if raw_lot < config.MIN_LOT_SIZE:
+                print(f"[RISK GUARD] Lot {raw_lot:.4f} < Min. Hủy để bảo toàn vốn.")
+                return "ERR_LOT_TOO_SMALL"
+            
+            # Làm tròn theo Step của sàn
+            steps = round(raw_lot / config.LOT_STEP)
+            lot_size = steps * config.LOT_STEP
+
+        # Kẹp giới hạn Max Lot
         lot_size = min(lot_size, config.MAX_LOT_SIZE)
-        
-        # D. Tính giá SL / TP cụ thể
-        rr_ratio = config.PRESET_SCALPING_FAST["TP_RR_RATIO"]
+        if lot_size < config.MIN_LOT_SIZE: lot_size = config.MIN_LOT_SIZE
+
+        # C. Tính giá SL / TP cụ thể
+        rr_ratio = params["TP_RR_RATIO"]
         
         if direction == "BUY":
             sl_price = price - sl_distance
@@ -82,14 +95,17 @@ class TradeManager:
             order_type = mt5.ORDER_TYPE_SELL
 
         # 4. GỬI LỆNH (EXECUTION)
-        print(f"Executing {direction}: Lot {lot_size}, SL {sl_price:.2f}, TP {tp_price:.2f}")
+        # Lưu tên Preset vào comment để sau này Trailing biết đường xử lý
+        comment = f"V2_{preset_name}" 
+        
+        print(f"Executing {direction} [{preset_name}]: Lot {lot_size}, SL {sl_price:.2f}, TP {tp_price:.2f}")
+        
         result = self.connector.place_order(
             symbol, order_type, lot_size, sl_price, tp_price, 
-            config.MAGIC_NUMBER, "V2_Exec"
+            config.MAGIC_NUMBER, comment
         )
         
         if result and result.retcode == 10009: # TRADE_RETCODE_DONE
-            # Cập nhật ngay vào bộ nhớ
             self.state["trades_today_count"] += 1
             self.state["active_trades"].append(result.order)
             save_state(self.state)
@@ -100,86 +116,120 @@ class TradeManager:
 
     def update_running_trades(self):
         """
-        Hàm chạy ngầm liên tục:
-        1. Kiểm tra lệnh đóng -> Cập nhật PnL & Streak.
-        2. Dời SL (Trailing) cho lệnh đang chạy.
+        Vòng lặp giám sát lệnh ngầm.
         """
-        # --- 1. CẬP NHẬT TRẠNG THÁI (PnL & Streak) ---
+        # --- 1. CẬP NHẬT PnL & STREAK (Giữ nguyên logic cũ) ---
         try:
-            # Lấy lịch sử giao dịch trong 24h qua
             from_date = datetime.now() - timedelta(hours=24)
             history = mt5.history_deals_get(from_date, datetime.now())
-            
             if history:
                 for deal in history:
-                    # Chỉ check lệnh của Bot (Magic Number) và là lệnh ĐÓNG (Entry Out)
                     if deal.magic == config.MAGIC_NUMBER and deal.entry == 1: 
                         pos_id = deal.position_id
-                        
-                        # Nếu lệnh này nằm trong danh sách đang theo dõi -> Nó vừa đóng
                         if pos_id in self.state["active_trades"]:
                             profit = deal.profit + deal.swap + deal.commission
-                            
-                            # Cộng dồn PnL hôm nay
                             self.state["pnl_today"] += profit
                             
-                            # Cập nhật Chuỗi Thua (Losing Streak)
-                            if profit < 0: # Thua
-                                # Nếu lỗ quá nhỏ (kiểu trượt giá 0.01) có thể bỏ qua, nhưng strict thì tính luôn
-                                self.state["losing_streak"] += 1
-                            else: # Thắng
-                                self.state["losing_streak"] = 0 # Reset về 0
+                            if profit < 0: self.state["losing_streak"] += 1
+                            else: self.state["losing_streak"] = 0
                             
-                            # Xóa khỏi danh sách active
                             self.state["active_trades"].remove(pos_id)
                             save_state(self.state)
-                            print(f"[UPDATE] Trade Closed: {pos_id}. Profit: ${profit:.2f}. Streak: {self.state['losing_streak']}")
-
-        except Exception as e:
-            # print(f"Lỗi update history: {e}")
+                            print(f"[UPDATE] Closed {pos_id}. PnL: {profit:.2f}. Streak: {self.state['losing_streak']}")
+        except Exception:
             pass
 
-        # --- 2. TRAILING STOP (Dời SL) ---
+        # --- 2. TRAILING STOP (NÂNG CẤP LOGIC MỚI) ---
         try:
-            # Lấy danh sách lệnh đang mở trên sàn
             positions = self.connector.get_all_open_positions()
             my_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
             
             for pos in my_positions:
                 self._apply_trailing_logic(pos)
                 
-        except Exception as e:
+        except Exception:
             pass
 
     def _apply_trailing_logic(self, position):
-        """Logic dời SL về Hòa Vốn (Break-Even)"""
+        """
+        Logic "Bậc Thang" (Staircase Trailing).
+        Dời SL từng bước dựa trên R (Risk Unit).
+        """
+        # 1. Xác định Preset của lệnh này (dựa vào comment)
+        # Comment dạng "V2_SCALPING" -> Lấy "SCALPING"
+        preset_name = "SCALPING" # Mặc định
+        if position.comment and position.comment.startswith("V2_"):
+            parts = position.comment.split("_")
+            if len(parts) > 1 and parts[1] in config.PRESETS:
+                preset_name = parts[1]
+        
+        params = config.PRESETS[preset_name]
+        
+        # 2. Lấy thông số kỹ thuật
         symbol = position.symbol
         entry = position.price_open
-        sl = position.sl
+        current_sl = position.sl
         current_price = position.price_current
         
-        # Cấu hình Trigger (khi lãi bao nhiêu R thì dời)
-        be_trigger_rr = config.PRESET_SCALPING_FAST["BE_TRIGGER_RR"]
+        # Tính khoảng cách Risk ban đầu (1R)
+        # Vì ta không lưu 1R lúc vào lệnh, ta ước lượng lại bằng % của Preset
+        # (Đây là cách an toàn để không phải lưu database phức tạp)
+        estimated_risk_dist = entry * (params["SL_PERCENT"] / 100.0)
         
-        # Tính khoảng cách Rủi ro ban đầu (1R)
-        risk_dist = abs(entry - sl) if sl > 0 else 0
-        if risk_dist == 0: return
+        if estimated_risk_dist == 0: return
 
-        # Tính lãi hiện tại (theo khoảng cách giá)
+        # Tính lãi hiện tại quy ra bao nhiêu R
         profit_dist = abs(current_price - entry)
+        current_r = profit_dist / estimated_risk_dist
         
-        # Nếu lãi >= 0.8R (hoặc số config) -> Dời về Entry
-        if profit_dist >= (risk_dist * be_trigger_rr):
-            new_sl = entry # Dời về đúng giá vào lệnh (Hòa vốn)
-            
-            # Kiểm tra: Chỉ dời nếu SL mới tốt hơn SL cũ
-            should_modify = False
-            
-            if position.type == 0: # BUY
-                if new_sl > sl: should_modify = True # Chỉ dời lên
-            elif position.type == 1: # SELL
-                if new_sl < sl or sl == 0: should_modify = True # Chỉ dời xuống
+        # 3. Logic Trailing Bậc Thang (Staircase)
+        be_trigger = params["BE_TRIGGER_RR"]      # Ví dụ 0.8R
+        step_r = params["TRAILING_STEP_RR"]       # Ví dụ 0.5R
+        
+        new_sl = None
 
-            if should_modify:
-                print(f"[TRAILING] Dời SL về hòa vốn cho lệnh {position.ticket}")
-                self.connector.modify_position(position.ticket, new_sl, position.tp)
+        # A. Check Hòa Vốn (Level 1)
+        if current_r >= be_trigger:
+            # Nếu chưa về hòa vốn -> Dời về Entry
+            dist_to_entry = abs(current_sl - entry)
+            # Nếu SL đang thua (xa hơn entry 0.1 giá)
+            is_losing_sl = False
+            if position.type == 0: # BUY
+                if current_sl < entry - 0.00001: is_losing_sl = True
+            else: # SELL
+                if current_sl > entry + 0.00001: is_losing_sl = True
+                
+            if is_losing_sl:
+                new_sl = entry
+                # print(f"[TRAIL] {position.ticket}: Trigger BE ({current_r:.2f}R). Move to Entry.")
+
+            # B. Check Trailing Dương (Level 2+)
+            # Chỉ trail khi đã qua mức BE + Step
+            # Công thức: Số bậc = (Lãi hiện tại - Mức BE) / Bước nhảy
+            # Ví dụ: Lãi 1.4R. BE 0.8. Step 0.5. -> (1.4 - 0.8)/0.5 = 1.2 -> 1 bậc.
+            if current_r >= (be_trigger + step_r):
+                # Tính xem đang ở bậc thứ mấy
+                steps_climbed = math.floor((current_r - be_trigger) / step_r)
+                
+                # Bậc 1 nghĩa là lãi thêm 1 Step -> Dời SL lên mức lãi (1 * Step)
+                # Lưu ý: Ta cộng thêm một chút lợi nhuận buffer
+                target_profit_r = steps_climbed * step_r
+                target_profit_dist = target_profit_r * estimated_risk_dist
+                
+                if position.type == 0: # BUY
+                    candidate_sl = entry + target_profit_dist
+                    if candidate_sl > current_sl + 0.00001: # Chỉ dời lên
+                        new_sl = candidate_sl
+                else: # SELL
+                    candidate_sl = entry - target_profit_dist
+                    if candidate_sl < current_sl - 0.00001 or current_sl == 0: # Chỉ dời xuống
+                        new_sl = candidate_sl
+
+        # 4. Thực thi dời SL
+        if new_sl is not None:
+            # Làm tròn giá theo Point của sàn
+            point = mt5.symbol_info(symbol).point
+            new_sl = round(new_sl / point) * point
+            
+            print(f"[TRAILING] {preset_name} | Ticket {position.ticket}: Lãi {current_r:.2f}R. Dời SL về {new_sl}")
+            self.connector.modify_position(position.ticket, new_sl, position.tp)
