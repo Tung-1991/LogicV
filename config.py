@@ -1,90 +1,39 @@
 # -*- coding: utf-8 -*-
-# Tên file: config.py
+# FILE: config.py
+# Cấu hình chuẩn Logic V2.1 (Execution-based Scalping)
 
-# === 1. HỆ THỐNG ===
-LOOP_SLEEP_SECONDS = 5      # (Giây) Thời gian nghỉ của luồng TSL
-NUM_H1_BARS = 70            # Số nến 1H (Trend) cần tải
-NUM_M15_BARS = 70           # Số nến 15M (Entry) cần tải
+# === 1. KẾT NỐI & HỆ THỐNG ===
+SYMBOL = "BTCUSD"           # Cặp tiền trade (Nhớ đổi đúng tên trên MT5, ví dụ: BTCUSDm)
+MAGIC_NUMBER = 8888         # Định danh để phân biệt lệnh của Tool này
+LOOP_SLEEP_SECONDS = 1      # Tốc độ cập nhật UI (giây)
 
-# === 2. GIAO DỊCH CHUNG ===
-SYMBOL = "ETHUSD"           # Cặp tiền giao dịch
-CONTRACT_SIZE = 1           # Kích thước hợp đồng (ví dụ: 1 ETH/lot)
-max_trade = 1               # Số lệnh tối đa cùng lúc
-trend_timeframe = "1H"      # Khung thời gian xét Trend
-entry_timeframe = "15M"     # Khung thời gian xét Entry
-ALLOW_LONG_TRADES = True    # Cho phép lệnh Long
-ALLOW_SHORT_TRADES = True   # Cho phép lệnh Short
+# === 2. QUẢN LÝ VỐN (RULE 2 - CỐT LÕI) ===
+RISK_MODE = "PERCENT"       # "PERCENT" (Risk theo % vốn) hoặc "FIXED_USD"
+RISK_PER_TRADE_PERCENT = 0.30  # Chuẩn V2.1: 0.3% Equity mỗi lệnh
+RISK_PER_TRADE_USD = 10.0      # Dùng nếu để mode FIXED_USD
 
-# === 3. QUẢN LÝ VỐN & RỦI RO (RiskManager) ===
-BACKTEST_INITIAL_CAPITAL = 1000.0  # Vốn khởi điểm (Backtest)
-RISK_MANAGEMENT_MODE = "FIXED_LOT"  # Chế độ QLV: "FIXED_LOT", "RISK_PERCENT", "DYNAMIC"
-fixed_lot = 5.0                     # Lô cố định (cho "FIXED_LOT" hoặc "DYNAMIC")
-RISK_PERCENT_PER_TRADE = 2.0        # % rủi ro/lệnh (cho "RISK_PERCENT" hoặc "DYNAMIC")
+# === 3. GIỚI HẠN KỶ LUẬT (THE SHIELD) ===
+MAX_DAILY_LOSS_PERCENT = 1.5   # Rule 3: Lỗ quá 1.5% ngày -> KHÓA APP
+MAX_LOSING_STREAK = 3          # Rule 4: Thua 3 lệnh liên tiếp -> KHÓA APP
+MAX_TRADES_PER_DAY = 15        # Rule 5: Giới hạn số lệnh/ngày
+MAX_RISK_ALLOWED = 2.0         # Safety: Không bao giờ cho phép tính ra risk > 2%
 
-# --- (NÂNG CẤP 2) Bảo vệ vốn (Max Loss SL) ---
-USE_MAX_USD_SL_FOR_FIXED_LOT = False # Bật/Tắt SL tối đa (theo USD)
-MAX_USD_LOSS_PER_TRADE = 300.0      # Ngưỡng lỗ USD tối đa (chỉ cho FIXED_LOT)
+# === 4. PRESET SCALPING (CHIẾN LƯỢC) ===
+# Cấu hình mặc định cho nút bấm
+PRESET_SCALPING_FAST = {
+    "SL_MODE": "PERCENT",      # Cách tính SL: "PERCENT" (theo giá) hoặc "ATR"
+    "TP_MODE": "RR",           # Cách tính TP: "RR" (Risk:Reward) hoặc "PERCENT"
+    
+    "SL_PERCENT": 0.4,         # Stoploss: 0.4% giá trị (Ví dụ BTC 50k -> SL 200$)
+    "TP_RR_RATIO": 1.5,        # TP = 1.5 lần Risk (RR 1:1.5)
+    
+    "BE_TRIGGER_RR": 0.8,      # Dời về hòa vốn khi lãi chạy được 0.8R
+    "TRAILING_MODE": "ATR",    # Trailing Stop theo ATR
+    "ATR_PERIOD": 14,
+    "ATR_MULTIPLIER": 2.0      # Khoảng cách Trailing (2 x ATR)
+}
 
-# === 4. LỌC TREND (1H) ===
-USE_TREND_FILTER = True         # Bật/Tắt bộ lọc Trend 1H
-USE_SUPERTREND_FILTER = True    # Bật/Tắt lọc Supertrend
-USE_EMA_TREND_FILTER = True     # Bật/Tắt lọc EMA 50
-USE_ADX_FILTER = True           # Bật/Tắt lọc ADX (cho GĐ 1)
-ADX_MIN_LEVEL = 20              # Ngưỡng ADX (phân biệt trend/sideways) (Dùng nếu Vùng Xám TẮT)
-
-# --- (NÂNG CẤP 3) Vùng Xám ADX (ADX Grey Zone) ---
-USE_ADX_GREY_ZONE = False    # Bật/Tắt logic Vùng Xám
-ADX_WEAK = 18               # Ngưỡng DƯỚI Vùng Xám (ADX < 18 -> Sideways)
-ADX_STRONG = 23             # Ngưỡng TRÊN Vùng Xám (ADX > 23 -> Trend)
-                            # (Nếu ADX ở giữa 18-23 -> "Grey Zone" -> Thận trọng/Không vào lệnh)
-
-# === 5. LỌC ENTRY (15M) Nến + volume  ===
-ENTRY_LOGIC_MODE = "DYNAMIC"   # Chế độ Entry: "BREAKOUT", "PULLBACK", "DYNAMIC"
-PULLBACK_CANDLE_PATTERN = "ENGULFING" # Mẫu nến đảo chiều Pullback 
-USE_CANDLE_FILTER = True        # Bật/Tắt lọc Nến (thân nến mạnh)
-min_body_percent = 50.0         # % thân nến tối thiểu
-USE_VOLUME_FILTER = True        # Bật/Tắt lọc Volume (đột biến)
-volume_ma_period = 20           # Chu kỳ VMA (cho Volume)
-volume_sd_multiplier = 0.5      # Hệ số nhân StdDev (cho Volume)
-
-
-# === 6. QUẢN LÝ LỆNH (SL/TSL/Exit) ===
-COOLDOWN_MINUTES = 1        # (Phút) Thời gian chờ giữa các lệnh
-USE_EMERGENCY_EXIT = True       # Bật/Tắt Thoát khẩn cấp (theo 1H)
-
-# --- SL Ban đầu ---
-sl_atr_multiplier = 0.2       # Hệ số SL ban đầu (dựa trên ATR) + swingpoint (Dùng nếu Động TẮT)
-
-# --- Dời BE ---
-isMoveToBE_Enabled = True       # Bật/Tắt dời SL về hòa vốn (BE)
-tsl_trigger_R = 1.0             # Kích hoạt dời BE khi đạt R:R
-be_atr_buffer = 0.8             # Hệ số SL dời BE (dựa trên ATR) (Dùng nếu Động TẮT)
-
-# --- Trailing Stop (TSL) ---
-TSL_LOGIC_MODE = "DYNAMIC"       # Chế độ TSL: "STATIC", "DYNAMIC", "AGGRESSIVE"
-trail_atr_buffer = 0.2         # Hệ số TSL (dựa trên ATR) (Dùng nếu Động TẮT)
-
-# --- (NÂNG CẤP 1) Hệ số ATR Động (Dynamic ATR Buffer) ---
-USE_DYNAMIC_ATR_BUFFER = False   # Bật/Tắt Hệ số ATR "co dãn" (Tác động SL, BE, TSL)
-DYN_ATR_MA_PERIOD = 50          # Chu kỳ MA(ATR) để đo biến động (dài hạn)
-DYN_ATR_MIN_CAP_RATIO = 0.75    # Giới hạn co dãn (Dưới) (ví dụ: 0.75x)
-DYN_ATR_MAX_CAP_RATIO = 2.0     # Giới hạn co dãn (Trên) (ví dụ: 2.0x)
-
-# === 7. CHỈ BÁO (Periods) ===
-atr_period = 14                 # Chu kỳ ATR (cho SL/TSL)
-swing_period = 5                # Chu kỳ Swing (cho SL/TSL)
-
-ST_ATR_PERIOD = 10              # Chu kỳ ATR (của Supertrend)
-ST_MULTIPLIER = 3.0             # Hệ số nhân (của Supertrend)
-
-DI_PERIOD = 14                  # Chu kỳ DI (của ADX)
-ADX_PERIOD = 14                 # Chu kỳ làm mượt (của ADX)
-
-TREND_EMA_PERIOD = 50           # Chu kỳ EMA (Trend 1H)
-ENTRY_EMA_PERIOD = 21           # Chu kỳ EMA (Entry 15M)
-
-# === 8. HẠ TẦNG & DỮ LIỆU ===
-DATA_DIR = "data"               # Thư mục chứa file CSV, logs, state
-OUTPUT_DIR = "data"             # Thư mục lưu kết quả backtest
-RESULTS_CSV_FILE = "backtest_results.csv" # Tên file CSV kết quả
-MONTHS_TO_DOWNLOAD = 6          # Số tháng tải dữ liệu
+# === 5. GIỚI HẠN SÀN (EXNESS) ===
+MIN_LOT_SIZE = 0.01        # Lot tối thiểu
+MAX_LOT_SIZE = 200.0       # Lot tối đa
+LOT_STEP = 0.01            # Bước nhảy lot
