@@ -18,13 +18,14 @@ def load_state() -> Dict[str, Any]:
     default_state = {
         "date": get_today_str(),
         "pnl_today": 0.0,          # Lãi/Lỗ thực tế hôm nay ($)
-        "starting_balance": 0.0,   # Số dư đầu ngày (để tính % Daily Loss)
-        "trades_today_count": 0,   # Số lệnh đã vào hôm nay
-        "losing_streak": 0,        # Chuỗi thua liên tiếp hiện tại
-        "active_trades": []        # Danh sách ticket đang chạy
+        "starting_balance": 0.0,   # Số dư đầu ngày
+        "trades_today_count": 0,   # Số lệnh đã vào
+        "losing_streak": 0,        # Chuỗi thua hiện tại
+        "active_trades": [],       # Ticket đang chạy
+        "tsl_disabled_tickets": [], # Ticket bị tắt TSL
+        "daily_history": []        # [NEW] Danh sách chi tiết các lệnh đã đóng trong ngày
     }
     
-    # Tạo thư mục data nếu chưa có
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
 
     if not os.path.exists(STATE_FILE):
@@ -34,15 +35,21 @@ def load_state() -> Dict[str, Any]:
         with open(STATE_FILE, "r") as f:
             state = json.load(f)
             
-            # === LOGIC NGÀY MỚI (New Day Reset) ===
+            # Đảm bảo có key mới nếu file cũ thiếu
+            if "daily_history" not in state: state["daily_history"] = []
+            if "tsl_disabled_tickets" not in state: state["tsl_disabled_tickets"] = []
+
+            # === LOGIC NGÀY MỚI ===
             if state.get("date") != get_today_str():
                 print(f"--- [NEW DAY {get_today_str()}] Reset Daily Stats ---")
                 state["date"] = get_today_str()
                 state["pnl_today"] = 0.0
                 state["trades_today_count"] = 0
                 state["active_trades"] = [] 
-                state["losing_streak"] = 0 # Reset chuỗi thua đầu ngày
-                state["starting_balance"] = 0.0 # Để code tự lấy lại balance mới
+                state["losing_streak"] = 0 
+                state["starting_balance"] = 0.0 
+                state["tsl_disabled_tickets"] = []
+                state["daily_history"] = [] # Reset lịch sử ngày cũ
                 
             return state
     except Exception as e:
