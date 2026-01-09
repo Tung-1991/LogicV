@@ -4,13 +4,10 @@
 # === 1. KẾT NỐI & HỆ THỐNG ===
 # Danh sách các đồng coin muốn trade (Hiện trên Menu)
 COIN_LIST = [
-    "BTCUSDm", 
-    "ETHUSDm", 
-    "XAUUSDm",
     "BTCUSD", 
     "ETHUSD"
 ]
-DEFAULT_SYMBOL = "BTCUSDm"      # Coin mặc định khi mở App
+DEFAULT_SYMBOL = "ETHUSD"      # Coin mặc định khi mở App
 SYMBOL = DEFAULT_SYMBOL         # Biến nội bộ (Bot tự dùng, không cần sửa)
 
 MAGIC_NUMBER = 8888             # Định danh lệnh của Bot
@@ -19,7 +16,7 @@ LOOP_SLEEP_SECONDS = 1          # Tốc độ cập nhật (giây)
 # === CẤU HÌNH AN TOÀN (STRICT MODE - MỚI) ===
 STRICT_MODE_DEFAULT = True      # Mặc định bật chế độ an toàn (True/False)
 MAX_PING_MS = 150               # Ping > 150ms là báo Lag (FAIL)
-MAX_SPREAD_POINTS = 50          # Spread > 50 point là báo Cao (FAIL)
+MAX_SPREAD_POINTS = 150          # Spread > 50 point là báo Cao (FAIL)
 
 # === 2. QUẢN LÝ VỐN (QUAN TRỌNG) ===
 LOT_SIZE_MODE = "DYNAMIC"       # Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
@@ -35,6 +32,7 @@ RISK_PER_TRADE_USD = 10.0       # (Dự phòng) Mất tối đa 10$/lệnh nếu
 MAX_DAILY_LOSS_PERCENT = 1.5    # Lỗ quá 1.5% ngày -> KHÓA APP
 MAX_LOSING_STREAK = 3           # Thua 3 lệnh thông -> KHÓA APP
 MAX_TRADES_PER_DAY = 15         # Giới hạn số lệnh/ngày
+MAX_OPEN_POSITIONS = 2          # Giới hạn số lệnh mở cùng lúc
 
 # === 4. CÁC GÓI CHIẾN LƯỢC (PRESETS) ===
 DEFAULT_PRESET = "SCALPING"

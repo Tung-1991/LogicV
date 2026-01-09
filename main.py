@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 # FILE: main.py
-# Giao diện điều khiển V2.4 (Full UI: Symbol Select, Strict Mode, Popup Confirm)
-# Đã nâng cấp: Dynamic Coin List & Configurable Strict Mode
+# V3.1: Final Stable (Fix Crash Commission + Restore System Log)
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
 import time
 import sys
+import MetaTrader5 as mt5
 
-# Import các module cốt lõi
 import config
 from core.exness_connector import ExnessConnector
 from core.checklist_manager import ChecklistManager
@@ -19,232 +18,281 @@ from core.storage_manager import load_state
 class BotUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("V2.4 EXECUTION TOOL")
-        self.root.geometry("380x680") # Tăng chiều cao chút để chứa đủ nút
-        self.root.configure(bg="#1e1e1e")
+        self.root.title("PRO SCALPING V3.1 (STABLE)")
+        self.root.geometry("800x650") # Tăng chiều cao/rộng để chứa đủ cả Log và Table
+        self.root.configure(bg="#121212")
         self.root.attributes("-topmost", True)
         
-        # --- 1. KHỞI TẠO BIẾN TRẠNG THÁI ---
-        # Biến lưu trạng thái Strict Mode (Lấy mặc định từ Config)
-        try:
-            default_strict = config.STRICT_MODE_DEFAULT
-        except AttributeError:
-            default_strict = True # Fallback nếu config chưa có
-            
-        self.var_strict_mode = tk.BooleanVar(value=default_strict)
+        self.var_strict_mode = tk.BooleanVar(value=config.STRICT_MODE_DEFAULT)
+        self.running = True
 
-        self.lock = threading.Lock()
-
-        # --- 2. KHỞI TẠO CORE ---
-        self.log_buffer = []
+        # --- CORE INIT ---
         print(">>> Đang kết nối MT5...")
-        
         self.connector = ExnessConnector()
         if self.connector.connect():
-            print(">>> Kết nối MT5 THÀNH CÔNG!")
-        else:
-            print(">>> LỖI KẾT NỐI MT5! Vui lòng kiểm tra.")
-
+            print(">>> MT5 CONNECTED.")
+        
         self.checklist_mgr = ChecklistManager(self.connector)
         self.trade_mgr = TradeManager(self.connector, self.checklist_mgr)
-        
-        # --- 3. XÂY DỰNG GIAO DIỆN ---
-        self.setup_ui()
 
-        # --- 4. CHẠY BACKGROUND THREAD ---
-        self.running = True
+        # --- UI LAYOUT ---
+        # Chia làm 2 cột: Left (Control + Log) - Right (Running Trades)
+        self.main_paned = tk.PanedWindow(root, orient="horizontal", bg="#121212")
+        self.main_paned.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.frm_left = tk.Frame(self.main_paned, bg="#1e1e1e", width=350)
+        self.frm_right = tk.Frame(self.main_paned, bg="#252526", width=450)
+        
+        self.main_paned.add(self.frm_left)
+        self.main_paned.add(self.frm_right)
+
+        self.setup_left_panel()
+        self.setup_right_panel()
+
+        # Thread Update
         self.thread = threading.Thread(target=self.bg_update_loop, daemon=True)
         self.thread.start()
-
-    def setup_ui(self):
-        # A. Header
-        self.frm_head = tk.Frame(self.root, bg="#1e1e1e")
-        self.frm_head.pack(fill="x", pady=10)
         
-        self.lbl_equity = tk.Label(self.frm_head, text="EQUITY: $----", font=("Arial", 16, "bold"), fg="#00e676", bg="#1e1e1e")
-        self.lbl_equity.pack()
-        
-        self.lbl_pnl = tk.Label(self.frm_head, text="PnL Today: $0.00", font=("Arial", 11), fg="white", bg="#1e1e1e")
-        self.lbl_pnl.pack()
+        self.log("Hệ thống đã khởi động. Sẵn sàng chiến đấu!")
 
-        # === B. SETUP PANEL (Chọn Coin, Preset, Mode) ===
-        self.frm_strat = tk.LabelFrame(self.root, text=" SETUP ", font=("Arial", 9, "bold"), fg="#FFD700", bg="#1e1e1e")
-        self.frm_strat.pack(fill="x", padx=10, pady=5)
-        
-        # Hàng 1: Chọn Coin & Preset
-        tk.Label(self.frm_strat, text="Coin:", fg="white", bg="#1e1e1e").grid(row=0, column=0, padx=5, sticky="w")
-        
-        # --- CẬP NHẬT: Lấy danh sách coin từ Config ---
-        try:
-            coin_values = config.COIN_LIST
-            default_sym = config.DEFAULT_SYMBOL
-        except AttributeError:
-            coin_values = ["BTCUSDm", "ETHUSDm", "XAUUSDm"] # Fallback
-            default_sym = "BTCUSDm"
+    def setup_left_panel(self):
+        # 1. HEADER (Equity)
+        self.lbl_equity = tk.Label(self.frm_left, text="$----", font=("Impact", 22), fg="#00e676", bg="#1e1e1e")
+        self.lbl_equity.pack(pady=(10, 0))
+        self.lbl_stats = tk.Label(self.frm_left, text="PnL: $0.00 | Streak: 0", font=("Arial", 10), fg="white", bg="#1e1e1e")
+        self.lbl_stats.pack(pady=(0, 10))
 
-        self.cbo_symbol = ttk.Combobox(self.frm_strat, values=coin_values, state="normal", width=10)
-        self.cbo_symbol.set(default_sym)
-        self.cbo_symbol.grid(row=0, column=1, padx=5, pady=5)
+        # 2. SETUP BOX
+        frm_setup = tk.LabelFrame(self.frm_left, text=" SETUP ", font=("Arial", 9, "bold"), fg="#FFD700", bg="#1e1e1e")
+        frm_setup.pack(fill="x", padx=10, pady=5)
 
-        tk.Label(self.frm_strat, text="Pre:", fg="white", bg="#1e1e1e").grid(row=0, column=2, padx=5, sticky="w")
-        self.cbo_preset = ttk.Combobox(self.frm_strat, values=list(config.PRESETS.keys()), state="readonly", width=8)
+        # Chọn Coin & Preset
+        f1 = tk.Frame(frm_setup, bg="#1e1e1e")
+        f1.pack(fill="x", pady=5)
+        self.cbo_symbol = ttk.Combobox(f1, values=config.COIN_LIST, state="readonly", width=12)
+        self.cbo_symbol.set(config.DEFAULT_SYMBOL)
+        self.cbo_symbol.pack(side="left", padx=5)
+        
+        self.cbo_preset = ttk.Combobox(f1, values=list(config.PRESETS.keys()), state="readonly", width=10)
         self.cbo_preset.set(config.DEFAULT_PRESET)
-        self.cbo_preset.grid(row=0, column=3, padx=5, pady=5)
+        self.cbo_preset.pack(side="left", padx=5)
 
-        # Hàng 2: Checkbox Strict Mode
-        # Biến self.var_strict_mode đã được khởi tạo trong __init__ với giá trị từ config
-        self.chk_strict = tk.Checkbutton(self.frm_strat, text="Chặn trade nếu Lag/Spread cao", variable=self.var_strict_mode, 
-                                         bg="#1e1e1e", fg="orange", selectcolor="#1e1e1e", activebackground="#1e1e1e")
-        self.chk_strict.grid(row=1, column=0, columnspan=4, sticky="w", padx=5)
+        # Strict Mode
+        tk.Checkbutton(frm_setup, text="Strict Mode (Lag check)", variable=self.var_strict_mode, 
+                       bg="#1e1e1e", fg="gray", selectcolor="#1e1e1e", activebackground="#1e1e1e").pack(anchor="w", padx=5)
 
-        # Hàng 3: Info Lot
-        lot_info = f"MODE: {config.LOT_SIZE_MODE}"
-        if config.LOT_SIZE_MODE == "FIXED":
-            lot_info += f" ({config.FIXED_LOT_VOLUME} lot)"
-        else:
-            lot_info += f" (Risk {config.RISK_PER_TRADE_PERCENT}%)"
+        # 3. LIVE PREVIEW
+        frm_preview = tk.LabelFrame(self.frm_left, text=" PREVIEW (Dự kiến) ", font=("Arial", 9, "bold"), fg="#03A9F4", bg="#1e1e1e")
+        frm_preview.pack(fill="x", padx=10, pady=5)
         
-        tk.Label(self.frm_strat, text=lot_info, font=("Consolas", 9, "bold"), fg="#00bcd4", bg="#1e1e1e").grid(row=2, column=0, columnspan=4, sticky="w", padx=5, pady=5)
-
-        # C. Checklist Panel
-        self.frm_check = tk.LabelFrame(self.root, text=" CHECKLIST ", font=("Arial", 9, "bold"), fg="gray", bg="#1e1e1e")
-        self.frm_check.pack(fill="x", padx=10, pady=5)
+        self.lbl_preview_lot = tk.Label(frm_preview, text="Lot: ---", font=("Consolas", 11, "bold"), fg="white", bg="#1e1e1e")
+        self.lbl_preview_lot.pack(anchor="w", padx=10)
         
+        self.lbl_preview_risk = tk.Label(frm_preview, text="Risk: $---", font=("Consolas", 11, "bold"), fg="#ff5252", bg="#1e1e1e")
+        self.lbl_preview_risk.pack(anchor="w", padx=10)
+        
+        self.lbl_preview_sl = tk.Label(frm_preview, text="SL Dist: ---", font=("Consolas", 9), fg="gray", bg="#1e1e1e")
+        self.lbl_preview_sl.pack(anchor="w", padx=10)
+
+        # 4. CHECKLIST
+        frm_check = tk.LabelFrame(self.frm_left, text=" CHECKLIST ", fg="gray", bg="#1e1e1e")
+        frm_check.pack(fill="x", padx=10, pady=5)
         self.check_labels = {}
-        # Thêm mục "Mạng & Spread" vào danh sách hiển thị
-        checks = ["Mạng & Spread", "Daily Loss", "Chuỗi Thua", "Số Lệnh", "Trạng thái"]
-        
-        for name in checks:
-            lbl = tk.Label(self.frm_check, text=f"• {name}", font=("Consolas", 10), bg="#1e1e1e", fg="gray", anchor="w")
-            lbl.pack(fill="x", padx=10, pady=2)
-            self.check_labels[name] = lbl
+        for name in ["Mạng/Spread", "Daily Loss", "Chuỗi Thua", "Số Lệnh", "Trạng thái"]:
+            l = tk.Label(frm_check, text=f"• {name}", font=("Arial", 9), bg="#1e1e1e", fg="gray", anchor="w")
+            l.pack(fill="x", padx=5)
+            self.check_labels[name] = l
 
-        # D. Buttons
-        self.frm_btn = tk.Frame(self.root, bg="#1e1e1e")
-        self.frm_btn.pack(pady=10)
-        
-        self.btn_long = tk.Button(self.frm_btn, text="LONG\n(BUY)", font=("Arial", 12, "bold"), 
-                                  bg="#2e7d32", fg="white", width=12, height=2,
+        # 5. BUTTONS
+        f_btn = tk.Frame(self.frm_left, bg="#1e1e1e")
+        f_btn.pack(pady=10)
+        self.btn_long = tk.Button(f_btn, text="LONG", bg="#2e7d32", fg="white", font=("Arial", 12, "bold"), width=12, height=2,
                                   command=lambda: self.on_click_trade("BUY"))
         self.btn_long.grid(row=0, column=0, padx=5)
         
-        self.btn_short = tk.Button(self.frm_btn, text="SHORT\n(SELL)", font=("Arial", 12, "bold"), 
-                                   bg="#c62828", fg="white", width=12, height=2,
+        self.btn_short = tk.Button(f_btn, text="SHORT", bg="#c62828", fg="white", font=("Arial", 12, "bold"), width=12, height=2,
                                    command=lambda: self.on_click_trade("SELL"))
         self.btn_short.grid(row=0, column=1, padx=5)
 
-        # E. Log
-        self.lbl_log_title = tk.Label(self.root, text=" SYSTEM LOG:", font=("Arial", 8), fg="gray", bg="#1e1e1e", anchor="w")
-        self.lbl_log_title.pack(fill="x", padx=10)
+        # 6. SYSTEM LOG (KHÔI PHỤC LẠI Ở ĐÂY)
+        tk.Label(self.frm_left, text="SYSTEM LOG:", font=("Arial", 8, "bold"), fg="gray", bg="#1e1e1e", anchor="w").pack(fill="x", padx=10)
+        self.txt_log = tk.Text(self.frm_left, height=8, bg="black", fg="#00e676", font=("Consolas", 8), state="disabled")
+        self.txt_log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    def setup_right_panel(self):
+        # Header
+        tk.Label(self.frm_right, text="RUNNING TRADES", font=("Arial", 10, "bold"), fg="white", bg="#252526").pack(pady=10)
         
-        self.txt_log = tk.Text(self.root, height=8, bg="black", fg="#00e676", font=("Consolas", 8), state="disabled")
-        self.txt_log.pack(fill="both", padx=10, pady=(0, 10))
+        # Table
+        cols = ("Ticket", "Symbol", "Type", "Lot", "PnL")
+        self.tree = ttk.Treeview(self.frm_right, columns=cols, show="headings", height=20)
+        
+        self.tree.heading("Ticket", text="#")
+        self.tree.column("Ticket", width=70)
+        self.tree.heading("Symbol", text="Coin")
+        self.tree.column("Symbol", width=70)
+        self.tree.heading("Type", text="Type")
+        self.tree.column("Type", width=50)
+        self.tree.heading("Lot", text="Vol")
+        self.tree.column("Lot", width=60)
+        self.tree.heading("PnL", text="Profit ($)")
+        self.tree.column("PnL", width=80)
+        
+        self.tree.pack(fill="both", expand=True, padx=5)
+
+        # Close Button
+        tk.Button(self.frm_right, text="❌ ĐÓNG LỆNH ĐANG CHỌN", bg="#424242", fg="white", font=("Arial", 10),
+                  command=self.close_selected_trade).pack(pady=10, fill="x", padx=5)
 
     def log(self, msg, error=False):
         timestamp = time.strftime("%H:%M:%S")
         text = f"[{timestamp}] {msg}\n"
-        self.txt_log.config(state="normal")
-        self.txt_log.insert("end", text)
-        if error:
-            self.txt_log.tag_add("err", "end-2l", "end-1c")
-            self.txt_log.tag_config("err", foreground="#ff5252")
-        self.txt_log.see("end")
-        self.txt_log.config(state="disabled")
+        try:
+            self.txt_log.config(state="normal")
+            self.txt_log.insert("end", text)
+            if error:
+                self.txt_log.tag_add("err", "end-2l", "end-1c")
+                self.txt_log.tag_config("err", foreground="#ff5252")
+            self.txt_log.see("end")
+            self.txt_log.config(state="disabled")
+        except:
+            pass
 
+    # --- LOGIC UPDATE ---
     def bg_update_loop(self):
         while self.running:
             try:
-                # 1. Lấy thông tin realtime từ UI (Symbol & Strict Mode)
-                current_symbol = self.cbo_symbol.get()
-                is_strict = self.var_strict_mode.get()
+                sym = self.cbo_symbol.get()
+                preset = self.cbo_preset.get()
+                strict = self.var_strict_mode.get()
 
-                # 2. Update logic
+                # Update Logic
                 self.trade_mgr.update_running_trades()
-                acc_info = self.connector.get_account_info()
-                current_state = self.trade_mgr.state
+                acc = self.connector.get_account_info()
+                state = self.trade_mgr.state
                 
-                # 3. Chạy Checklist với thông tin mới nhất
-                # Truyền symbol và strict mode vào để check spread/ping
-                check_result = self.checklist_mgr.run_pre_trade_checks(acc_info, current_state, current_symbol, is_strict)
+                # Run Checks
+                check_res = self.checklist_mgr.run_pre_trade_checks(acc, state, sym, strict)
                 
-                self.root.after(0, self.update_ui_components, acc_info, current_state, check_result)
+                # Get Market Data for Preview
+                tick = mt5.symbol_info_tick(sym)
+                
+                # Get Running Trades
+                positions = self.connector.get_all_open_positions()
+                my_pos = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+
+                self.root.after(0, self.update_ui, acc, state, check_res, tick, preset, sym, my_pos)
+
             except Exception as e:
-                print(f"BG Error: {e}")
+                print(e)
             time.sleep(config.LOOP_SLEEP_SECONDS)
 
-    def update_ui_components(self, acc, state, check_res):
-        if acc:
-            self.lbl_equity.config(text=f"EQUITY: ${acc['equity']:,.2f}")
-        
-        pnl = state["pnl_today"]
-        streak = state["losing_streak"]
-        pnl_color = "#00e676" if pnl >= 0 else "#ff5252"
-        self.lbl_pnl.config(text=f"PnL: ${pnl:.2f} | Streak: {streak}", fg=pnl_color)
+    def update_ui(self, acc, state, check_res, tick, preset, sym, positions):
+        # 1. Stats
+        if acc: self.lbl_equity.config(text=f"${acc['equity']:,.2f}")
+        pnl_color = "#00e676" if state["pnl_today"] >= 0 else "#ff5252"
+        self.lbl_stats.config(text=f"PnL: ${state['pnl_today']:.2f} | Streak: {state['losing_streak']}", fg=pnl_color)
 
+        # 2. Checklist
         can_trade = check_res["passed"]
-        
         for item in check_res["checks"]:
             name = item["name"]
-            status = item["status"]
-            msg = item["msg"]
-            color = "#00e676" if status == "OK" else ("#FFA500" if status == "WARN" else "#ff5252")
-            icon = "✔" if status == "OK" else "✖"
-            if name in self.check_labels:
-                self.check_labels[name].config(text=f"{icon} {name}: {msg}", fg=color)
+            stt = item["status"]
+            ui_name = name if name != "Mạng & Spread" else "Mạng/Spread"
+            
+            color = "#00e676" if stt == "OK" else ("#FFA500" if stt == "WARN" else "#ff5252")
+            if ui_name in self.check_labels:
+                self.check_labels[ui_name].config(text=f"{'✔' if stt=='OK' else '✖'} {name}: {item['msg']}", fg=color)
 
-        btn_state = "normal" if can_trade else "disabled"
-        if self.btn_long["state"] != btn_state:
-            self.btn_long.config(state=btn_state)
-            self.btn_short.config(state=btn_state)
+        state_btn = "normal" if can_trade else "disabled"
+        if self.btn_long["state"] != state_btn:
+            self.btn_long.config(state=state_btn)
+            self.btn_short.config(state=state_btn)
             if not can_trade:
-                self.log("CHECKLIST: BỊ KHÓA (Vi phạm Rule)", error=True)
+                # Log lý do khóa nút (chỉ log 1 lần nếu cần thiết, ở đây tạm thời chưa log để đỡ spam)
+                pass
+
+        # 3. LIVE PREVIEW
+        if tick and acc:
+            params = config.PRESETS.get(preset)
+            sl_pct = params["SL_PERCENT"] / 100.0
+            price = tick.ask
+            equity = acc['equity']
+            sl_dist = price * sl_pct
+            
+            contract_size = 1.0 
+            sym_info = mt5.symbol_info(sym)
+            if sym_info: contract_size = sym_info.trade_contract_size
+            
+            risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
+            
+            if sl_dist > 0:
+                raw_lot = risk_usd / (sl_dist * contract_size)
+                lot = max(config.MIN_LOT_SIZE, round(raw_lot / config.LOT_STEP) * config.LOT_STEP)
+                lot = min(lot, config.MAX_LOT_SIZE)
+                real_risk = lot * sl_dist * contract_size
+                
+                self.lbl_preview_lot.config(text=f"Lot: {lot:.2f}")
+                self.lbl_preview_risk.config(text=f"Risk: ${real_risk:.2f}")
+                self.lbl_preview_sl.config(text=f"SL Dist: {sl_dist:.2f}")
             else:
-                self.log("CHECKLIST: SẴN SÀNG.")
+                self.lbl_preview_lot.config(text="Lot: ???")
+
+        # 4. Running Trades Table
+        # Xóa cũ
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Thêm mới (FIX CRASH Ở ĐÂY)
+        for p in positions:
+            p_type = "BUY" if p.type == 0 else "SELL"
+            
+            # --- SAFE GET ATTRIBUTES ---
+            # Dùng getattr để tránh lỗi nếu mt5 object thiếu thuộc tính
+            swap = getattr(p, 'swap', 0.0)
+            commission = getattr(p, 'commission', 0.0)
+            profit = p.profit
+            
+            total_profit = profit + swap + commission
+            # ---------------------------
+
+            self.tree.insert("", "end", values=(p.ticket, p.symbol, p_type, p.volume, f"{total_profit:.2f}"))
 
     def on_click_trade(self, direction):
-        # Lấy toàn bộ tham số từ UI
-        selected_preset = self.cbo_preset.get()
-        selected_symbol = self.cbo_symbol.get()
-        is_strict = self.var_strict_mode.get()
+        s = self.cbo_symbol.get()
+        p = self.cbo_preset.get()
+        strict = self.var_strict_mode.get()
         
-        # Gán ngược vào config để đồng bộ (nếu cần dùng ở chỗ khác)
-        config.SYMBOL = selected_symbol
+        self.log(f"Đang gửi lệnh {direction} {s} ({p})...")
         
-        self.log(f"Yêu cầu {direction} {selected_symbol} ({selected_preset})...")
-        
-        def run_trade_thread(force_min=False):
-            # Gọi execute với đủ tham số mới
-            res = self.trade_mgr.execute_manual_trade(
-                direction, selected_preset, selected_symbol, is_strict, accept_min_lot=force_min
-            )
-            self.root.after(0, lambda: self.handle_trade_result(res, direction, selected_preset, selected_symbol, is_strict))
-        
-        threading.Thread(target=run_trade_thread).start()
-
-    def handle_trade_result(self, res, direction, preset, symbol, strict):
-        if res == "SUCCESS":
-            self.log(f"✅ ĐÃ KHỚP LỆNH {direction}!")
-            return
-
-        # Xử lý Popup xác nhận vốn nhỏ
-        if res.startswith("CONFIRM_LOW_CAP"):
-            _, min_lot, risk_usd = res.split("|")
-            msg = (f"⚠️ CẢNH BÁO VỐN NHỎ\n\n"
-                   f"Theo rủi ro tính toán, lot quá nhỏ (< {min_lot}).\n"
-                   f"Nếu đánh {min_lot} Lot, rủi ro lệnh này là: ~${risk_usd}.\n\n"
-                   f"Bạn có CHẤP NHẬN vào lệnh không?")
-            
-            choice = messagebox.askyesno("Xác nhận ngoại lệ", msg)
-            if choice:
-                self.log(f"User chấp nhận rủi ro ${risk_usd}. Đang vào lại...")
-                # Gọi lại thread với force_min=True
-                threading.Thread(target=lambda: self.trade_mgr.execute_manual_trade(
-                    direction, preset, symbol, strict, accept_min_lot=True
-                )).start()
+        def run():
+            res = self.trade_mgr.execute_manual_trade(direction, p, s, strict)
+            if res == "SUCCESS":
+                self.root.after(0, lambda: self.log(f"✅ Đã khớp lệnh {direction} {s}!", False))
+            elif res.startswith("CONFIRM"):
+                # Xử lý confirm nếu cần
+                pass 
             else:
-                self.log("❌ Đã hủy lệnh do rủi ro cao.")
+                self.root.after(0, lambda: self.log(f"❌ LỖI: {res}", True))
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Lỗi: {res}"))
+                
+        threading.Thread(target=run).start()
+
+    def close_selected_trade(self):
+        sel = self.tree.selection()
+        if not sel: return
+        item = self.tree.item(sel[0])
+        ticket = item['values'][0]
+        
+        positions = self.connector.get_all_open_positions()
+        target = next((p for p in positions if p.ticket == ticket), None)
+        
+        if target:
+            if messagebox.askyesno("Confirm", f"Đóng lệnh #{ticket}?"):
+                self.log(f"Đang đóng lệnh #{ticket}...")
+                self.connector.close_position(target)
         else:
-            self.log(f"❌ LỖI: {res}", error=True)
+            self.log(f"Lệnh #{ticket} không tồn tại!", True)
 
 if __name__ == "__main__":
     try:

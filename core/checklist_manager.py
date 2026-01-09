@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/checklist_manager.py
-# Checklist Manager V2.4 - Upgrade: Dynamic Ping & Spread from Config
+# Checklist Manager V2.5 - Upgrade: Check Max Positions from Config
 
 import config
 import MetaTrader5 as mt5
@@ -17,7 +17,7 @@ class ChecklistManager:
         if self.connector._is_connected:
             # --- A. CHECK PING ---
             # Lấy thông tin Ping từ MT5
-            ping_ms = self.connector.mt5.terminal_info().ping_last / 1000
+            ping_ms = mt5.terminal_info().ping_last / 1000
             ping_status = "OK"
             
             # [NÂNG CẤP] Dùng ngưỡng từ Config thay vì số cứng 150
@@ -97,15 +97,22 @@ class ChecklistManager:
         else:
              checks.append({"name": "Số Lệnh", "status": "OK", "msg": f"{count}"})
 
-        # 6. Open Position Check
+        # 6. Open Position Check (Đã update theo Config)
         positions = self.connector.get_all_open_positions()
         # Lọc lệnh của bot mình (theo Magic Number)
         my_pos = [p for p in positions if p.magic == config.MAGIC_NUMBER]
         
-        if len(my_pos) > 0:
-            checks.append({"name": "Trạng thái", "status": "FAIL", "msg": "Đang có lệnh"})
+        # [MỚI] So sánh với MAX_OPEN_POSITIONS trong config
+        # Lưu ý: Đảm bảo file config.py đã có biến MAX_OPEN_POSITIONS
+        try:
+            max_open_pos = config.MAX_OPEN_POSITIONS
+        except AttributeError:
+            max_open_pos = 1 # Fallback an toàn mặc định là 1 nếu quên config
+
+        if len(my_pos) >= max_open_pos:
+            checks.append({"name": "Trạng thái", "status": "FAIL", "msg": f"Full ({len(my_pos)}/{max_open_pos})"})
             all_passed = False
         else:
-            checks.append({"name": "Trạng thái", "status": "OK", "msg": "Sẵn sàng"})
+            checks.append({"name": "Trạng thái", "status": "OK", "msg": f"Đang chạy: {len(my_pos)}"})
 
         return {"passed": all_passed, "checks": checks}
