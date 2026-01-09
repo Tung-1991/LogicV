@@ -82,7 +82,7 @@ class TradeManager:
             return f"ERR_MT5: {err}"
 
     def update_running_trades(self):
-        # 1. CẬP NHẬT PnL & LỊCH SỬ (LOGIC MỚI: ĐIỂM DANH)
+        # 1. CẬP NHẬT PnL & LỊCH SỬ (LOGIC MỚI: ĐIỂM DANH & CHỜ DEAL OUT)
         try:
             # Lấy tất cả lệnh đang mở trên sàn
             current_positions = self.connector.get_all_open_positions()
@@ -99,43 +99,58 @@ class TradeManager:
                     # Truy xuất lịch sử CỤ THỂ của ticket này
                     deals = mt5.history_deals_get(position=ticket)
                     
-                    if deals:
-                        # Deal cuối cùng là deal đóng lệnh (Entry Out)
-                        exit_deal = deals[-1]
-                        profit = exit_deal.profit + exit_deal.swap + exit_deal.commission
+                    # [FIX QUAN TRỌNG] Kiểm tra xem đã có Deal ĐÓNG (OUT) chưa?
+                    # Nếu chưa có (deals rỗng hoặc deal cuối là Entry In), nghĩa là Server chưa xử lý xong -> Bỏ qua, đợi vòng sau.
+                    if not deals or len(deals) == 0:
+                        continue
                         
-                        # Update State
-                        self.state["pnl_today"] += profit
-                        
-                        if profit < 0: self.state["losing_streak"] += 1
-                        else: self.state["losing_streak"] = 0
-                        
-                        # Phân loại lý do đóng
-                        close_reason = "Auto/TP/SL"
-                        if exit_deal.comment and "User_Close" in exit_deal.comment:
-                            close_reason = "Manual (User)"
-                        elif exit_deal.reason == mt5.DEAL_REASON_SL:
-                            close_reason = "Hit SL"
-                        elif exit_deal.reason == mt5.DEAL_REASON_TP:
-                            close_reason = "Hit TP"
-                            
-                        # Lưu vào lịch sử chi tiết
-                        history_item = {
-                            "ticket": ticket,
-                            "symbol": exit_deal.symbol,
-                            "profit": profit,
-                            "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
-                            "reason": close_reason
-                        }
-                        if "daily_history" not in self.state: self.state["daily_history"] = []
-                        self.state["daily_history"].append(history_item)
+                    exit_deal = deals[-1]
+                    
+                    # Nếu deal cuối cùng không phải là deal đóng lệnh (Entry Out) -> Đợi tiếp
+                    if exit_deal.entry != mt5.DEAL_ENTRY_OUT:
+                        continue
 
-                        # Xóa khỏi danh sách theo dõi
-                        self.state["active_trades"].remove(ticket)
-                        if ticket in self.state.get("tsl_disabled_tickets", []):
-                            self.state["tsl_disabled_tickets"].remove(ticket)
+                    # --- Khi code chạy đến đây nghĩa là chắc chắn đã có kết quả Lãi/Lỗ ---
+                    profit = exit_deal.profit + exit_deal.swap + exit_deal.commission
+                    
+                    # Update State
+                    self.state["pnl_today"] += profit
+                    
+                    # CẬP NHẬT CHUỖI THUA CHÍNH XÁC
+                    if profit < 0: 
+                        self.state["losing_streak"] += 1
+                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Chuỗi thua tăng lên: {self.state['losing_streak']}")
+                    else: 
+                        self.state["losing_streak"] = 0
+                        
+                    # Phân loại lý do đóng
+                    close_reason = "Auto/TP/SL"
+                    if exit_deal.comment and "User_Close" in exit_deal.comment:
+                        close_reason = "Manual (User)"
+                    elif exit_deal.reason == mt5.DEAL_REASON_SL:
+                        close_reason = "Hit SL"
+                    elif exit_deal.reason == mt5.DEAL_REASON_TP:
+                        close_reason = "Hit TP"
+                    elif exit_deal.reason == mt5.DEAL_REASON_CLIENT: # Đóng tay thường trả về lý do Client
+                        close_reason = "Manual (Client)"
                             
-                        print(f"[CLOSED] #{ticket} | PnL: {profit:.2f} | Reason: {close_reason}")
+                    # Lưu vào lịch sử chi tiết
+                    history_item = {
+                        "ticket": ticket,
+                        "symbol": exit_deal.symbol,
+                        "profit": profit,
+                        "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
+                        "reason": close_reason
+                    }
+                    if "daily_history" not in self.state: self.state["daily_history"] = []
+                    self.state["daily_history"].append(history_item)
+
+                    # Xóa khỏi danh sách theo dõi (Chỉ xóa khi ĐÃ TÍNH TOÁN XONG)
+                    self.state["active_trades"].remove(ticket)
+                    if ticket in self.state.get("tsl_disabled_tickets", []):
+                        self.state["tsl_disabled_tickets"].remove(ticket)
+                            
+                    print(f"[CLOSED] #{ticket} | PnL: {profit:.2f} | Reason: {close_reason}")
                 
                 # Lưu state ngay lập tức
                 save_state(self.state)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: main.py
-# V4.0: Ultimate UI (Price, TSL Toggle, Quick Close, History, Enhanced Checklist)
+# V4.1: Ultimate UI + Manual Reset + Smart Color Checklist
 
 import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel
@@ -14,7 +14,8 @@ import config
 from core.exness_connector import ExnessConnector
 from core.checklist_manager import ChecklistManager
 from core.trade_manager import TradeManager
-from core.storage_manager import load_state
+# [MOD] Import thêm save_state để dùng cho nút Reset
+from core.storage_manager import load_state, save_state
 
 class BotUI:
     def __init__(self, root):
@@ -61,7 +62,13 @@ class BotUI:
         self.lbl_equity = tk.Label(self.frm_left, text="$----", font=("Impact", 24), fg="#00e676", bg="#1e1e1e")
         self.lbl_equity.pack(pady=(15, 0))
         self.lbl_stats = tk.Label(self.frm_left, text="PnL: $0.00 | Streak: 0", font=("Arial", 11), fg="white", bg="#1e1e1e")
-        self.lbl_stats.pack(pady=(0, 15))
+        self.lbl_stats.pack(pady=(0, 5)) # Giảm padding dưới để nhét nút Reset
+
+        # [NEW] NÚT RESET STATS
+        btn_reset = tk.Button(self.frm_left, text="🔄 Reset Daily Stats", font=("Arial", 8), 
+                              bg="#333333", fg="gray", bd=0, activebackground="#444", activeforeground="white",
+                              command=self.reset_daily_stats)
+        btn_reset.pack(pady=(0, 15))
 
         # 2. SETUP BOX
         frm_setup = tk.LabelFrame(self.frm_left, text=" SETUP ", font=("Arial", 9, "bold"), fg="#FFD700", bg="#1e1e1e")
@@ -209,6 +216,18 @@ class BotUI:
             self.txt_log.config(state="disabled")
         except:
             pass
+    
+    # [NEW] HÀM RESET THỦ CÔNG
+    def reset_daily_stats(self):
+        if messagebox.askyesno("Xác nhận", "Bạn muốn xóa toàn bộ Lãi/Lỗ và bộ đếm hôm nay về 0?"):
+            self.trade_mgr.state["pnl_today"] = 0.0
+            self.trade_mgr.state["trades_today_count"] = 0
+            self.trade_mgr.state["losing_streak"] = 0
+            # Lưu ý: Không reset active_trades để tránh lỗi lệnh treo
+            self.trade_mgr.state["daily_history"] = []
+            
+            save_state(self.trade_mgr.state)
+            self.log(">>> Đã Reset thủ công thống kê ngày!", True)
 
     # --- LOGIC UPDATE ---
     def bg_update_loop(self):
@@ -257,8 +276,14 @@ class BotUI:
             stt = item["status"]
             msg = item["msg"]
             
-            # Chọn màu chuẩn
-            if stt == "OK": color = "#00e676"     # Green
+            # [MOD] Chọn màu chuẩn (Cập nhật logic màu Cam)
+            if stt == "OK": 
+                color = "#00e676"     # Green (Mặc định)
+                
+                # Nếu là mục Daily Loss mà thấy số âm (nhưng vẫn OK) -> Chuyển màu Cam cảnh báo
+                if name == "Daily Loss" and "-" in msg:
+                    color = "#ff9800" # Orange
+                    
             elif stt == "WARN": color = "#FFD700" # Gold
             else: color = "#ff5252"               # Red
             
