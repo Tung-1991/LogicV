@@ -13,6 +13,10 @@ SYMBOL = DEFAULT_SYMBOL         # Biến nội bộ (Bot tự dùng, không cầ
 MAGIC_NUMBER = 8888             # Định danh lệnh của Bot
 LOOP_SLEEP_SECONDS = 1          # Tốc độ cập nhật (giây)
 
+# [NEW] CẤU HÌNH RESET NGÀY MỚI (QUAN TRỌNG)
+# Giờ bắt đầu ngày mới (0-23). Ví dụ: 6 nghĩa là 6:00 sáng mới reset PnL và Rule.
+RESET_HOUR = 6
+
 # === CẤU HÌNH AN TOÀN (STRICT MODE - MỚI) ===
 STRICT_MODE_DEFAULT = True      # Mặc định bật chế độ an toàn (True/False)
 MAX_PING_MS = 150               # Ping > 150ms là báo Lag (FAIL)
@@ -20,6 +24,14 @@ MAX_SPREAD_POINTS = 150          # Spread > 50 point là báo Cao (FAIL)
 
 # === 2. QUẢN LÝ VỐN (QUAN TRỌNG) ===
 LOT_SIZE_MODE = "DYNAMIC"       # Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
+
+# [NEW] CẤU HÌNH PHÍ COMMISSION (Dùng để tính dự kiến)
+# Đơn vị: USD trên mỗi 1 Lot (tính cả 2 chiều mở/đóng)
+# Bot sẽ dùng số này cộng với Spread thực tế để hiển thị tổng phí dự kiến.
+COMMISSION_RATES = {
+    "BTCUSD": 16.0,
+    "ETHUSD": 1.25
+}
 
 # Cấu hình cho mode FIXED
 FIXED_LOT_VOLUME = 0.01         # Nếu mode FIXED: Luôn đi 0.01 lot

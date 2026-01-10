@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# Logic V2.7: Smart Update (Fix PnL miss) & Manual Close Detection
 
 import logging
 import config
-from core.storage_manager import load_state, save_state
+# [UPDATE] Import thêm append_trade_log
+from core.storage_manager import load_state, save_state, append_trade_log
 import MetaTrader5 as mt5
 from datetime import datetime
 import math
@@ -82,48 +82,33 @@ class TradeManager:
             return f"ERR_MT5: {err}"
 
     def update_running_trades(self):
-        # 1. CẬP NHẬT PnL & LỊCH SỬ (LOGIC MỚI: ĐIỂM DANH & CHỜ DEAL OUT)
         try:
-            # Lấy tất cả lệnh đang mở trên sàn
             current_positions = self.connector.get_all_open_positions()
             current_tickets = [p.ticket for p in current_positions]
             
-            # Danh sách lệnh bot đang theo dõi
             tracked_tickets = list(self.state["active_trades"])
-            
-            # Tìm những lệnh "mất tích" (đã đóng)
             closed_tickets = [t for t in tracked_tickets if t not in current_tickets]
             
             if closed_tickets:
                 for ticket in closed_tickets:
-                    # Truy xuất lịch sử CỤ THỂ của ticket này
                     deals = mt5.history_deals_get(position=ticket)
-                    
-                    # [FIX QUAN TRỌNG] Kiểm tra xem đã có Deal ĐÓNG (OUT) chưa?
-                    # Nếu chưa có (deals rỗng hoặc deal cuối là Entry In), nghĩa là Server chưa xử lý xong -> Bỏ qua, đợi vòng sau.
                     if not deals or len(deals) == 0:
                         continue
                         
                     exit_deal = deals[-1]
-                    
-                    # Nếu deal cuối cùng không phải là deal đóng lệnh (Entry Out) -> Đợi tiếp
                     if exit_deal.entry != mt5.DEAL_ENTRY_OUT:
                         continue
 
-                    # --- Khi code chạy đến đây nghĩa là chắc chắn đã có kết quả Lãi/Lỗ ---
                     profit = exit_deal.profit + exit_deal.swap + exit_deal.commission
                     
-                    # Update State
                     self.state["pnl_today"] += profit
                     
-                    # CẬP NHẬT CHUỖI THUA CHÍNH XÁC
                     if profit < 0: 
                         self.state["losing_streak"] += 1
-                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Chuỗi thua tăng lên: {self.state['losing_streak']}")
+                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Chuỗi thua: {self.state['losing_streak']}")
                     else: 
                         self.state["losing_streak"] = 0
                         
-                    # Phân loại lý do đóng
                     close_reason = "Auto/TP/SL"
                     if exit_deal.comment and "User_Close" in exit_deal.comment:
                         close_reason = "Manual (User)"
@@ -131,13 +116,21 @@ class TradeManager:
                         close_reason = "Hit SL"
                     elif exit_deal.reason == mt5.DEAL_REASON_TP:
                         close_reason = "Hit TP"
-                    elif exit_deal.reason == mt5.DEAL_REASON_CLIENT: # Đóng tay thường trả về lý do Client
+                    elif exit_deal.reason == mt5.DEAL_REASON_CLIENT:
                         close_reason = "Manual (Client)"
-                            
-                    # Lưu vào lịch sử chi tiết
+                    
+                    # Xác định Type gốc (Ngược lại với deal đóng)
+                    # Deal đóng là SELL (1) -> Gốc là BUY. Deal đóng là BUY (0) -> Gốc là SELL.
+                    type_str = "BUY" if exit_deal.type == 1 else "SELL"
+
+                    # [NEW] Ghi log ra file CSV ngay lập tức
+                    append_trade_log(ticket, exit_deal.symbol, type_str, exit_deal.volume, profit, close_reason)
+
+                    # Lưu vào lịch sử chi tiết cho Popup UI
                     history_item = {
                         "ticket": ticket,
                         "symbol": exit_deal.symbol,
+                        "type": type_str, # Thêm trường Type
                         "profit": profit,
                         "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
                         "reason": close_reason
@@ -145,27 +138,16 @@ class TradeManager:
                     if "daily_history" not in self.state: self.state["daily_history"] = []
                     self.state["daily_history"].append(history_item)
 
-                    # Xóa khỏi danh sách theo dõi (Chỉ xóa khi ĐÃ TÍNH TOÁN XONG)
                     self.state["active_trades"].remove(ticket)
                     if ticket in self.state.get("tsl_disabled_tickets", []):
                         self.state["tsl_disabled_tickets"].remove(ticket)
                             
-                    print(f"[CLOSED] #{ticket} | PnL: {profit:.2f} | Reason: {close_reason}")
+                    print(f"[CLOSED] #{ticket} ({type_str}) | PnL: {profit:.2f} | Reason: {close_reason}")
                 
-                # Lưu state ngay lập tức
                 save_state(self.state)
 
         except Exception as e:
             print(f"Lỗi update: {e}")
-
-        # 2. TRAILING STOP
-        try:
-            positions = self.connector.get_all_open_positions()
-            my_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
-            for pos in my_positions:
-                self._apply_trailing_logic(pos)
-        except Exception:
-            pass
 
     def toggle_tsl(self, ticket):
         disabled_list = self.state.get("tsl_disabled_tickets", [])
@@ -207,7 +189,6 @@ class TradeManager:
         step_r = params["TRAILING_STEP_RR"]
         new_sl = None
 
-        # A. Check Hòa Vốn
         if current_r >= be_trigger:
             is_losing_sl = False
             if position.type == 0: # BUY
@@ -216,7 +197,6 @@ class TradeManager:
                 if current_sl > entry + 0.00001: is_losing_sl = True
             if is_losing_sl: new_sl = entry
 
-            # B. Check Trailing Dương
             if current_r >= (be_trigger + step_r):
                 steps_climbed = math.floor((current_r - be_trigger) / step_r)
                 target_profit_r = steps_climbed * step_r
