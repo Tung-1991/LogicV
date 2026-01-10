@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/checklist_manager.py
-# Checklist Manager V2.6: Detailed Comparison (Actual vs Limit)
+# Checklist Manager V4.3 Final: Safety First (Total Daily Loss Check)
 
 import config
 import MetaTrader5 as mt5
@@ -16,7 +16,11 @@ class ChecklistManager:
         # 1. Connection & Ping & Spread Check
         if self.connector._is_connected:
             # --- A. CHECK PING ---
-            ping_ms = mt5.terminal_info().ping_last / 1000
+            try:
+                ping_ms = mt5.terminal_info().ping_last / 1000
+            except:
+                ping_ms = 0
+                
             ping_status = "OK"
             
             try:
@@ -69,7 +73,7 @@ class ChecklistManager:
         if state["starting_balance"] == 0:
             state["starting_balance"] = account_info.get('balance', 0)
 
-        # 3. Daily Loss Check (Hiển thị so sánh Limit)
+        # 3. Daily Loss Check ($/%)
         start_bal = state["starting_balance"]
         pnl_today = state["pnl_today"]
         loss_pct = (pnl_today / start_bal * 100) if start_bal > 0 else 0
@@ -87,16 +91,18 @@ class ChecklistManager:
             else:
                 checks.append({"name": "Daily Loss", "status": "OK", "msg": loss_msg})
 
-        # 4. Losing Streak Check (Hiển thị Max)
-        streak = state["losing_streak"]
-        max_streak = config.MAX_LOSING_STREAK
-        streak_msg = f"{streak} (Max {max_streak})"
+        # 4. [UPDATED] Total Losing Trades Check (Thay vì Streak liên tiếp)
+        # Sử dụng biến 'daily_loss_count' (Tổng số lệnh thua trong ngày)
+        current_losses = state.get("daily_loss_count", 0) 
+        max_allowed_losses = config.MAX_LOSING_STREAK # Tạm dùng config này làm giới hạn tổng
         
-        if streak >= max_streak:
-            checks.append({"name": "Chuỗi Thua", "status": "FAIL", "msg": streak_msg})
+        loss_count_msg = f"{current_losses} (Max {max_allowed_losses})"
+        
+        if current_losses >= max_allowed_losses:
+            checks.append({"name": "Số Lệnh Thua", "status": "FAIL", "msg": loss_count_msg})
             all_passed = False
         else:
-            checks.append({"name": "Chuỗi Thua", "status": "OK", "msg": streak_msg})
+            checks.append({"name": "Số Lệnh Thua", "status": "OK", "msg": loss_count_msg})
 
         # 5. Trades Today Check (Hiển thị Max)
         count = state["trades_today_count"]

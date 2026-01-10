@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
+# Trade Manager V4.3 Final: Adjusted Logic (Total Daily Loss Count)
 
 import logging
 import config
-# [UPDATE] Import thêm append_trade_log
 from core.storage_manager import load_state, save_state, append_trade_log
 import MetaTrader5 as mt5
 from datetime import datetime
@@ -17,8 +17,18 @@ class TradeManager:
         self.checklist = checklist_manager
         self.state = load_state()
         
+        # [NEW] Khởi tạo biến đếm tổng lệnh thua trong ngày
+        if "daily_loss_count" not in self.state:
+            self.state["daily_loss_count"] = 0
+            
         if "tsl_disabled_tickets" not in self.state:
             self.state["tsl_disabled_tickets"] = []
+
+        # [AUTO-RESET] Logic phụ trợ:
+        # Nếu storage_manager đã reset biến đếm tổng lệnh (trades_today_count) về 0 do sang ngày mới
+        # Thì ta cũng ép biến đếm lệnh thua về 0 để đồng bộ.
+        if self.state.get("trades_today_count", 0) == 0:
+            self.state["daily_loss_count"] = 0
 
     def execute_manual_trade(self, direction, preset_name, symbol, strict_mode, accept_min_lot=False):
         config.SYMBOL = symbol 
@@ -103,11 +113,15 @@ class TradeManager:
                     
                     self.state["pnl_today"] += profit
                     
+                    # [UPDATED LOGIC] Tổng lệnh thua (Không Reset khi thắng)
                     if profit < 0: 
-                        self.state["losing_streak"] += 1
-                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Chuỗi thua: {self.state['losing_streak']}")
-                    else: 
-                        self.state["losing_streak"] = 0
+                        # Nếu chưa có biến thì tạo mới
+                        if "daily_loss_count" not in self.state: self.state["daily_loss_count"] = 0
+                        self.state["daily_loss_count"] += 1
+                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Tổng thua hôm nay: {self.state['daily_loss_count']}")
+                    else:
+                        # Thắng thì kệ, không reset counter thua nữa
+                        pass
                         
                     close_reason = "Auto/TP/SL"
                     if exit_deal.comment and "User_Close" in exit_deal.comment:
@@ -119,18 +133,14 @@ class TradeManager:
                     elif exit_deal.reason == mt5.DEAL_REASON_CLIENT:
                         close_reason = "Manual (Client)"
                     
-                    # Xác định Type gốc (Ngược lại với deal đóng)
-                    # Deal đóng là SELL (1) -> Gốc là BUY. Deal đóng là BUY (0) -> Gốc là SELL.
                     type_str = "BUY" if exit_deal.type == 1 else "SELL"
 
-                    # [NEW] Ghi log ra file CSV ngay lập tức
                     append_trade_log(ticket, exit_deal.symbol, type_str, exit_deal.volume, profit, close_reason)
 
-                    # Lưu vào lịch sử chi tiết cho Popup UI
                     history_item = {
                         "ticket": ticket,
                         "symbol": exit_deal.symbol,
-                        "type": type_str, # Thêm trường Type
+                        "type": type_str,
                         "profit": profit,
                         "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
                         "reason": close_reason
@@ -179,6 +189,7 @@ class TradeManager:
         current_sl = position.sl
         current_price = position.price_current
         
+        # Logic tính toán trailing giữ nguyên
         estimated_risk_dist = entry * (params["SL_PERCENT"] / 100.0)
         if estimated_risk_dist == 0: return
 
