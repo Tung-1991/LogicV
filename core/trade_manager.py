@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# Trade Manager V4.3 Final: Adjusted Logic (Total Daily Loss Count)
+# Trade Manager V4.4: Fixed TSL & Flexible Loss Count Mode
 
 import logging
 import config
@@ -17,7 +17,7 @@ class TradeManager:
         self.checklist = checklist_manager
         self.state = load_state()
         
-        # [NEW] Khởi tạo biến đếm tổng lệnh thua trong ngày
+        # Khởi tạo biến đếm lệnh thua nếu chưa có
         if "daily_loss_count" not in self.state:
             self.state["daily_loss_count"] = 0
             
@@ -99,6 +99,7 @@ class TradeManager:
             tracked_tickets = list(self.state["active_trades"])
             closed_tickets = [t for t in tracked_tickets if t not in current_tickets]
             
+            # 1. XỬ LÝ CÁC LỆNH ĐÃ ĐÓNG
             if closed_tickets:
                 for ticket in closed_tickets:
                     deals = mt5.history_deals_get(position=ticket)
@@ -110,18 +111,23 @@ class TradeManager:
                         continue
 
                     profit = exit_deal.profit + exit_deal.swap + exit_deal.commission
-                    
                     self.state["pnl_today"] += profit
                     
-                    # [UPDATED LOGIC] Tổng lệnh thua (Không Reset khi thắng)
+                    # [UPDATED LOGIC] Xử lý đếm lệnh thua theo Config
+                    if "daily_loss_count" not in self.state: self.state["daily_loss_count"] = 0
+                    
                     if profit < 0: 
-                        # Nếu chưa có biến thì tạo mới
-                        if "daily_loss_count" not in self.state: self.state["daily_loss_count"] = 0
+                        # Nếu thua: Luôn cộng dồn
                         self.state["daily_loss_count"] += 1
-                        print(f">>> [DETECT] Thua lệnh #{ticket} (${profit:.2f}) -> Tổng thua hôm nay: {self.state['daily_loss_count']}")
+                        print(f">>> [LOSS] Thua lệnh #{ticket} (${profit:.2f}) -> Counter: {self.state['daily_loss_count']}")
                     else:
-                        # Thắng thì kệ, không reset counter thua nữa
-                        pass
+                        # Nếu thắng: Kiểm tra Mode để quyết định Reset hay không
+                        mode = getattr(config, "LOSS_COUNT_MODE", "TOTAL")
+                        if mode == "STREAK":
+                            self.state["daily_loss_count"] = 0
+                            print(f">>> [WIN] Thắng lệnh #{ticket} (${profit:.2f}) -> [STREAK MODE] Reset Counter về 0")
+                        else:
+                            print(f">>> [WIN] Thắng lệnh #{ticket} (${profit:.2f}) -> [TOTAL MODE] Giữ nguyên Counter: {self.state['daily_loss_count']}")
                         
                     close_reason = "Auto/TP/SL"
                     if exit_deal.comment and "User_Close" in exit_deal.comment:
@@ -155,6 +161,12 @@ class TradeManager:
                     print(f"[CLOSED] #{ticket} ({type_str}) | PnL: {profit:.2f} | Reason: {close_reason}")
                 
                 save_state(self.state)
+
+            # 2. [FIXED] KÍCH HOẠT TRAILING STOP CHO CÁC LỆNH ĐANG CHẠY
+            # Đoạn này trước đây bị thiếu, giờ đã thêm vào để TSL hoạt động
+            for pos in current_positions:
+                if pos.magic == config.MAGIC_NUMBER: # Chỉ xử lý lệnh của Bot
+                    self._apply_trailing_logic(pos)
 
         except Exception as e:
             print(f"Lỗi update: {e}")
@@ -206,22 +218,29 @@ class TradeManager:
                 if current_sl < entry - 0.00001: is_losing_sl = True
             else: # SELL
                 if current_sl > entry + 0.00001: is_losing_sl = True
+            
+            # Kích hoạt Break-even (Dời về Entry)
             if is_losing_sl: new_sl = entry
 
+            # Kích hoạt Trailing Step (Dời Dương)
             if current_r >= (be_trigger + step_r):
                 steps_climbed = math.floor((current_r - be_trigger) / step_r)
-                target_profit_r = steps_climbed * step_r
-                target_profit_dist = target_profit_r * estimated_risk_dist
-                
-                if position.type == 0: # BUY
-                    candidate_sl = entry + target_profit_dist
-                    if candidate_sl > current_sl + 0.00001: new_sl = candidate_sl
-                else: # SELL
-                    candidate_sl = entry - target_profit_dist
-                    if candidate_sl < current_sl - 0.00001 or current_sl == 0: new_sl = candidate_sl
+                if steps_climbed > 0:
+                    target_profit_r = steps_climbed * step_r
+                    target_profit_dist = target_profit_r * estimated_risk_dist
+                    
+                    if position.type == 0: # BUY
+                        candidate_sl = entry + target_profit_dist
+                        if candidate_sl > current_sl + 0.00001: new_sl = candidate_sl
+                    else: # SELL
+                        candidate_sl = entry - target_profit_dist
+                        if candidate_sl < current_sl - 0.00001 or current_sl == 0: new_sl = candidate_sl
 
         if new_sl is not None:
             point = mt5.symbol_info(symbol).point
             new_sl = round(new_sl / point) * point
-            print(f"[TRAILING] {preset_name} | Ticket {position.ticket}: Lãi {current_r:.2f}R. Dời SL về {new_sl}")
-            self.connector.modify_position(position.ticket, new_sl, position.tp)
+            
+            # Chặn spam log nếu giá SL mới giống hệt giá cũ
+            if abs(new_sl - current_sl) > 0.00001:
+                print(f"[TRAILING] {preset_name} | Ticket {position.ticket}: Lãi {current_r:.2f}R. Dời SL về {new_sl}")
+                self.connector.modify_position(position.ticket, new_sl, position.tp)

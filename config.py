@@ -20,7 +20,7 @@ RESET_HOUR = 6
 # === CẤU HÌNH AN TOÀN (STRICT MODE - MỚI) ===
 STRICT_MODE_DEFAULT = True      # Mặc định bật chế độ an toàn (True/False)
 MAX_PING_MS = 150               # Ping > 150ms là báo Lag (FAIL)
-MAX_SPREAD_POINTS = 150          # Spread > 50 point là báo Cao (FAIL)
+MAX_SPREAD_POINTS = 150          # Spread > 150 point là báo Cao (FAIL)
 
 # === 2. QUẢN LÝ VỐN (QUAN TRỌNG) ===
 LOT_SIZE_MODE = "DYNAMIC"       # Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
@@ -42,9 +42,15 @@ RISK_PER_TRADE_USD = 10.0       # (Dự phòng) Mất tối đa 10$/lệnh nếu
 
 # === 3. KỶ LUẬT & KILL SWITCH ===
 MAX_DAILY_LOSS_PERCENT = 1.5    # Lỗ quá 1.5% ngày -> KHÓA APP
-MAX_LOSING_STREAK = 3           # Thua 3 lệnh thông -> KHÓA APP
+
+# [NEW] CHẾ ĐỘ ĐẾM LỆNH THUA (LINH HOẠT)
+# "STREAK": Thua 3 lệnh LIÊN TIẾP mới tính (Thắng 1 lệnh ở giữa sẽ reset về 0).
+# "TOTAL":  Tổng số lệnh thua trong ngày (Thắng không reset).
+LOSS_COUNT_MODE = "TOTAL"       # Boss sửa thành "STREAK" hoặc "TOTAL" tại đây
+
+MAX_LOSING_STREAK = 3           # Giới hạn số lệnh thua (Áp dụng theo mode đã chọn ở trên)
 MAX_TRADES_PER_DAY = 15         # Giới hạn số lệnh/ngày
-MAX_OPEN_POSITIONS = 2          # Giới hạn số lệnh mở cùng lúc
+MAX_OPEN_POSITIONS = 2          # Giới hạn số lệnh mở cùng lúc (Để 2 cho linh hoạt)
 
 # === 4. CÁC GÓI CHIẾN LƯỢC (PRESETS) ===
 DEFAULT_PRESET = "SCALPING"

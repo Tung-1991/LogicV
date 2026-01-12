@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/checklist_manager.py
-# Checklist Manager V4.3 Final: Safety First (Total Daily Loss Check)
+# Checklist Manager V4.4: Auto-detect Loss Mode & Smart UI Display
 
 import config
 import MetaTrader5 as mt5
@@ -91,12 +91,15 @@ class ChecklistManager:
             else:
                 checks.append({"name": "Daily Loss", "status": "OK", "msg": loss_msg})
 
-        # 4. [UPDATED] Total Losing Trades Check (Thay vì Streak liên tiếp)
-        # Sử dụng biến 'daily_loss_count' (Tổng số lệnh thua trong ngày)
+        # 4. [UPDATED] Losing Trades Check (Hiển thị Mode Streak hay Total)
         current_losses = state.get("daily_loss_count", 0) 
-        max_allowed_losses = config.MAX_LOSING_STREAK # Tạm dùng config này làm giới hạn tổng
+        max_allowed_losses = config.MAX_LOSING_STREAK
         
-        loss_count_msg = f"{current_losses} (Max {max_allowed_losses})"
+        # Tự động lấy tên Mode để hiển thị cho Boss biết
+        mode_name = getattr(config, "LOSS_COUNT_MODE", "TOTAL")
+        
+        # Ví dụ hiển thị: "[Total] 1 (Max 3)" hoặc "[Streak] 2 (Max 3)"
+        loss_count_msg = f"[{mode_name}] {current_losses} (Max {max_allowed_losses})"
         
         if current_losses >= max_allowed_losses:
             checks.append({"name": "Số Lệnh Thua", "status": "FAIL", "msg": loss_count_msg})
