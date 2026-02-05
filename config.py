@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: config.py
+# Updated: Support Account Types (Standard/Pro/Raw/Zero)
 
 # === 1. KẾT NỐI & HỆ THỐNG ===
 # Danh sách các đồng coin muốn trade (Hiện trên Menu)
@@ -17,6 +18,31 @@ LOOP_SLEEP_SECONDS = 1         # Tốc độ cập nhật (giây)
 # Giờ bắt đầu ngày mới (0-23). Ví dụ: 6 nghĩa là 6:00 sáng mới reset PnL và Rule.
 RESET_HOUR = 6
 
+# === 1.1 [NEW] CẤU HÌNH LOẠI TÀI KHOẢN (QUAN TRỌNG) ===
+# Dùng để tính phí Commission chính xác cho tính năng Break-Even và hiển thị lãi ròng.
+# Bot sẽ ưu tiên lấy phí từ mục này dựa trên loại tài khoản bạn chọn trên UI.
+
+# Danh sách các loại tài khoản và phí mặc định (USD/Lot/2 chiều)
+ACCOUNT_TYPES_CONFIG = {
+    "STANDARD": {
+        "DESC": "Spread cao, Không phí Comm",
+        "COMMISSION_PER_LOT": 0.0
+    },
+    "PRO": {
+        "DESC": "Spread thấp, Không phí Comm",
+        "COMMISSION_PER_LOT": 0.0
+    },
+    "RAW": {
+        "DESC": "Spread cực thấp, Phí Comm cố định",
+        "COMMISSION_PER_LOT": 7.0  # Exness thường là $3.5/side -> $7 tổng (Forex/Gold)
+    },
+    "ZERO": {
+        "DESC": "Spread bằng 0, Phí Comm cao",
+        "COMMISSION_PER_LOT": 7.0  # Tùy cặp, điền mức trung bình hoặc cao nhất để an toàn
+    }
+}
+DEFAULT_ACCOUNT_TYPE = "STANDARD" # Loại tài khoản mặc định khi mở App
+
 # === CẤU HÌNH AN TOÀN (STRICT MODE - MỚI) ===
 STRICT_MODE_DEFAULT = True     # Mặc định bật chế độ an toàn (True/False)
 MAX_PING_MS = 150              # Ping > 150ms là báo Lag (FAIL)
@@ -25,13 +51,12 @@ MAX_SPREAD_POINTS = 150        # Spread > 150 point là báo Cao (FAIL)
 # === 2. QUẢN LÝ VỐN (QUAN TRỌNG) ===
 LOT_SIZE_MODE = "DYNAMIC"      # Mode: "FIXED" (Đi lot cố định) hoặc "DYNAMIC" (Tính lot theo % rủi ro)
 
-# [NEW] CẤU HÌNH PHÍ COMMISSION (Dùng để tính điểm hoà vốn Break-Even chuẩn xác)
-# Đơn vị: USD trên mỗi 1 Lot (tính cả 2 chiều mở/đóng)
+# [UPDATED] CẤU HÌNH PHÍ COMMISSION CỤ THỂ (Ghi đè)
+# Nếu bạn muốn cấu hình phí riêng cho từng cặp (vì Crypto phí khác Forex), hãy điền vào đây.
+# Nếu để 0.0, Bot sẽ dùng giá trị mặc định của Loại Tài Khoản ở trên (ACCOUNT_TYPES_CONFIG).
 COMMISSION_RATES = {
-    #"BTCUSD": 16.0,
-    #"ETHUSD": 1.25
-    "BTCUSD": 0.0,
-    "ETHUSD": 0.0
+    "BTCUSD": 16.5,  # Phí cứng 16.5$ cho 1 lot BTC
+    "ETHUSD": 1.25   # Phí cứng 1.25$ cho 1 lot ETH
 }
 
 # Cấu hình cho mode FIXED

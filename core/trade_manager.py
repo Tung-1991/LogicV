@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# Trade Manager V5.1: Fix Crash 'commission' & TSL V3
+# Trade Manager V5.2: Dynamic Fee Calculation (Account Types) & TSL V3
 
 import logging
 import config
@@ -90,7 +90,10 @@ class TradeManager:
             err = result.comment if result else "Unknown"
             return f"ERR_MT5: {err}"
 
-    def update_running_trades(self):
+    def update_running_trades(self, account_type="STANDARD"):
+        """
+        [UPDATE] Thêm tham số account_type để tính phí Comm chuẩn xác cho TSL
+        """
         try:
             current_positions = self.connector.get_all_open_positions()
             current_tickets = [p.ticket for p in current_positions]
@@ -140,12 +143,13 @@ class TradeManager:
 
             for pos in current_positions:
                 if pos.magic == config.MAGIC_NUMBER: 
-                    self._apply_trailing_logic_v3(pos)
+                    # Truyền account_type vào hàm xử lý TSL
+                    self._apply_trailing_logic_v3(pos, account_type)
 
         except Exception as e:
             print(f"Lỗi update: {e}")
 
-    def _apply_trailing_logic_v3(self, position):
+    def _apply_trailing_logic_v3(self, position, account_type="STANDARD"):
         if not self.is_tsl_active(position.ticket): return
         symbol = position.symbol
         entry = position.price_open
@@ -170,14 +174,25 @@ class TradeManager:
         candidates = []
         tsl_cfg = config.TSL_CONFIG
         
-        # RULE 1: BE
+        # RULE 1: BE (Break-Even)
         if tsl_cfg["BE_ACTIVE"]:
             if current_r_gain >= tsl_cfg.get("BE_OFFSET_RR", 0.8):
                 contract_size = mt5.symbol_info(symbol).trade_contract_size
-                comm_rate = config.COMMISSION_RATES.get(symbol, 0.0)
-                # [FIX CRASH] Use getattr
+                
+                # --- [NEW] LOGIC TÍNH PHÍ DYNAMIC ---
+                # 1. Lấy phí từ Config theo Loại Tài Khoản
+                acc_cfg = config.ACCOUNT_TYPES_CONFIG.get(account_type, config.ACCOUNT_TYPES_CONFIG["STANDARD"])
+                comm_per_lot = acc_cfg["COMMISSION_PER_LOT"]
+                
+                # 2. Nếu symbol có cấu hình riêng (VD Crypto) thì ưu tiên
+                specific_rate = config.COMMISSION_RATES.get(symbol, 0.0)
+                if specific_rate > 0: comm_per_lot = specific_rate
+                
+                # 3. Tính tổng phí USD
+                # [FIX CRASH] Use getattr for swap
                 swap_val = getattr(position, 'swap', 0.0)
-                total_fee_usd = (comm_rate * volume) + abs(swap_val)
+                total_fee_usd = (comm_per_lot * volume) + abs(swap_val)
+                # ------------------------------------
                 
                 if contract_size > 0: fee_dist = total_fee_usd / (volume * contract_size)
                 else: fee_dist = 0
