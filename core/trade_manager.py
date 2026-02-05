@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# Trade Manager V4.4: Fixed TSL & Flexible Loss Count Mode
+# Trade Manager V5.1: Fix Crash 'commission' & TSL V3
 
 import logging
 import config
@@ -16,51 +16,48 @@ class TradeManager:
         self.connector = connector
         self.checklist = checklist_manager
         self.state = load_state()
+        if "daily_loss_count" not in self.state: self.state["daily_loss_count"] = 0
+        if "tsl_disabled_tickets" not in self.state: self.state["tsl_disabled_tickets"] = []
+        if self.state.get("trades_today_count", 0) == 0: self.state["daily_loss_count"] = 0
+
+    def execute_manual_trade(self, direction, preset_name, symbol, strict_mode, 
+                             manual_lot=0.0, manual_tp=0.0, manual_sl=0.0, bypass_checklist=False):
         
-        # Khởi tạo biến đếm lệnh thua nếu chưa có
-        if "daily_loss_count" not in self.state:
-            self.state["daily_loss_count"] = 0
-            
-        if "tsl_disabled_tickets" not in self.state:
-            self.state["tsl_disabled_tickets"] = []
-
-        # [AUTO-RESET] Logic phụ trợ:
-        # Nếu storage_manager đã reset biến đếm tổng lệnh (trades_today_count) về 0 do sang ngày mới
-        # Thì ta cũng ép biến đếm lệnh thua về 0 để đồng bộ.
-        if self.state.get("trades_today_count", 0) == 0:
-            self.state["daily_loss_count"] = 0
-
-    def execute_manual_trade(self, direction, preset_name, symbol, strict_mode, accept_min_lot=False):
         config.SYMBOL = symbol 
         acc_info = self.connector.get_account_info()
         res = self.checklist.run_pre_trade_checks(acc_info, self.state, symbol, strict_mode)
-        if not res["passed"]: return "CHECKLIST_FAIL"
+        
+        if not res["passed"]:
+            if bypass_checklist:
+                fail_reasons = [c['msg'] for c in res['checks'] if c['status'] == 'FAIL']
+                print(f"⚠️ [FORCE TRADE] Đã bỏ qua lỗi Checklist: {fail_reasons}")
+            else:
+                return "CHECKLIST_FAIL"
 
         params = config.PRESETS.get(preset_name, config.PRESETS["SCALPING"])
         tick = mt5.symbol_info_tick(symbol)
         if not tick: return "ERR_NO_TICK"
+        
         price = tick.ask if direction == "BUY" else tick.bid
-        
         equity = acc_info['equity']
-        sl_percent = params["SL_PERCENT"] / 100.0
-        sl_distance = price * sl_percent
-        if sl_distance == 0: return "ERR_CALC_SL"
-        
         sym_info = mt5.symbol_info(symbol)
         contract_size = sym_info.trade_contract_size if sym_info else 1.0
 
         lot_size = 0.0
-        if config.LOT_SIZE_MODE == "FIXED":
-            lot_size = config.FIXED_LOT_VOLUME
+        sl_distance = 0.0
+        if manual_sl > 0: sl_distance = abs(price - manual_sl)
         else:
-            risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
-            raw_lot = risk_usd / (sl_distance * contract_size)
-            if raw_lot < config.MIN_LOT_SIZE:
-                if accept_min_lot: lot_size = config.MIN_LOT_SIZE
-                else:
-                    real_risk_at_min = (config.MIN_LOT_SIZE * sl_distance * contract_size)
-                    return f"CONFIRM_LOW_CAP|{config.MIN_LOT_SIZE}|{real_risk_at_min:.2f}"
+            sl_percent = params["SL_PERCENT"] / 100.0
+            sl_distance = price * sl_percent
+
+        if manual_lot > 0: lot_size = manual_lot
+        else:
+            if config.LOT_SIZE_MODE == "FIXED": lot_size = config.FIXED_LOT_VOLUME
             else:
+                if sl_distance == 0: return "ERR_CALC_SL"
+                risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
+                raw_lot = risk_usd / (sl_distance * contract_size)
+                if raw_lot < config.MIN_LOT_SIZE: return f"ERR_LOT_TOO_SMALL|MaxRisk:${risk_usd:.2f}"
                 steps = round(raw_lot / config.LOT_STEP)
                 lot_size = steps * config.LOT_STEP
 
@@ -68,20 +65,22 @@ class TradeManager:
         if lot_size < config.MIN_LOT_SIZE: lot_size = config.MIN_LOT_SIZE
 
         rr_ratio = params["TP_RR_RATIO"]
-        if direction == "BUY":
-            sl_price = price - sl_distance
-            tp_price = price + (sl_distance * rr_ratio)
-            order_type = mt5.ORDER_TYPE_BUY
+        if manual_sl > 0: sl_price = manual_sl
         else:
-            sl_price = price + sl_distance
-            tp_price = price - (sl_distance * rr_ratio)
-            order_type = mt5.ORDER_TYPE_SELL
+            if direction == "BUY": sl_price = price - sl_distance
+            else: sl_price = price + sl_distance
 
+        if manual_tp > 0: tp_price = manual_tp
+        else:
+            real_sl_dist = abs(price - sl_price)
+            if direction == "BUY": tp_price = price + (real_sl_dist * rr_ratio)
+            else: tp_price = price - (real_sl_dist * rr_ratio)
+
+        order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
         comment = f"V2_{preset_name}" 
-        print(f"Executing {direction} [{preset_name}] on {symbol}: Lot {lot_size}, SL {sl_price:.2f}")
+        print(f"Executing {direction} | Lot {lot_size} | Entry {price} | SL {sl_price} | TP {tp_price}")
         
         result = self.connector.place_order(symbol, order_type, lot_size, sl_price, tp_price, config.MAGIC_NUMBER, comment)
-        
         if result and result.retcode == 10009:
             self.state["trades_today_count"] += 1
             self.state["active_trades"].append(result.order)
@@ -95,60 +94,39 @@ class TradeManager:
         try:
             current_positions = self.connector.get_all_open_positions()
             current_tickets = [p.ticket for p in current_positions]
-            
             tracked_tickets = list(self.state["active_trades"])
             closed_tickets = [t for t in tracked_tickets if t not in current_tickets]
             
-            # 1. XỬ LÝ CÁC LỆNH ĐÃ ĐÓNG
             if closed_tickets:
                 for ticket in closed_tickets:
                     deals = mt5.history_deals_get(position=ticket)
-                    if not deals or len(deals) == 0:
-                        continue
-                        
+                    if not deals or len(deals) == 0: continue
                     exit_deal = deals[-1]
-                    if exit_deal.entry != mt5.DEAL_ENTRY_OUT:
-                        continue
+                    if exit_deal.entry != mt5.DEAL_ENTRY_OUT: continue
 
-                    profit = exit_deal.profit + exit_deal.swap + exit_deal.commission
+                    # [FIX CRASH] Use getattr
+                    profit = exit_deal.profit + exit_deal.swap + getattr(exit_deal, 'commission', 0.0)
                     self.state["pnl_today"] += profit
                     
-                    # [UPDATED LOGIC] Xử lý đếm lệnh thua theo Config
                     if "daily_loss_count" not in self.state: self.state["daily_loss_count"] = 0
-                    
                     if profit < 0: 
-                        # Nếu thua: Luôn cộng dồn
                         self.state["daily_loss_count"] += 1
-                        print(f">>> [LOSS] Thua lệnh #{ticket} (${profit:.2f}) -> Counter: {self.state['daily_loss_count']}")
+                        print(f">>> [LOSS] #{ticket} (${profit:.2f}) -> Count: {self.state['daily_loss_count']}")
                     else:
-                        # Nếu thắng: Kiểm tra Mode để quyết định Reset hay không
                         mode = getattr(config, "LOSS_COUNT_MODE", "TOTAL")
-                        if mode == "STREAK":
-                            self.state["daily_loss_count"] = 0
-                            print(f">>> [WIN] Thắng lệnh #{ticket} (${profit:.2f}) -> [STREAK MODE] Reset Counter về 0")
-                        else:
-                            print(f">>> [WIN] Thắng lệnh #{ticket} (${profit:.2f}) -> [TOTAL MODE] Giữ nguyên Counter: {self.state['daily_loss_count']}")
+                        if mode == "STREAK": self.state["daily_loss_count"] = 0
                         
                     close_reason = "Auto/TP/SL"
-                    if exit_deal.comment and "User_Close" in exit_deal.comment:
-                        close_reason = "Manual (User)"
-                    elif exit_deal.reason == mt5.DEAL_REASON_SL:
-                        close_reason = "Hit SL"
-                    elif exit_deal.reason == mt5.DEAL_REASON_TP:
-                        close_reason = "Hit TP"
-                    elif exit_deal.reason == mt5.DEAL_REASON_CLIENT:
-                        close_reason = "Manual (Client)"
+                    if exit_deal.comment and "User_Close" in exit_deal.comment: close_reason = "Manual (User)"
+                    elif exit_deal.reason == mt5.DEAL_REASON_SL: close_reason = "Hit SL"
+                    elif exit_deal.reason == mt5.DEAL_REASON_TP: close_reason = "Hit TP"
                     
                     type_str = "BUY" if exit_deal.type == 1 else "SELL"
-
                     append_trade_log(ticket, exit_deal.symbol, type_str, exit_deal.volume, profit, close_reason)
 
                     history_item = {
-                        "ticket": ticket,
-                        "symbol": exit_deal.symbol,
-                        "type": type_str,
-                        "profit": profit,
-                        "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
+                        "ticket": ticket, "symbol": exit_deal.symbol, "type": type_str,
+                        "profit": profit, "time": datetime.fromtimestamp(exit_deal.time).strftime("%H:%M:%S"),
                         "reason": close_reason
                     }
                     if "daily_history" not in self.state: self.state["daily_history"] = []
@@ -157,19 +135,129 @@ class TradeManager:
                     self.state["active_trades"].remove(ticket)
                     if ticket in self.state.get("tsl_disabled_tickets", []):
                         self.state["tsl_disabled_tickets"].remove(ticket)
-                            
-                    print(f"[CLOSED] #{ticket} ({type_str}) | PnL: {profit:.2f} | Reason: {close_reason}")
-                
+                    print(f"[CLOSED] #{ticket} | PnL: {profit:.2f}")
                 save_state(self.state)
 
-            # 2. [FIXED] KÍCH HOẠT TRAILING STOP CHO CÁC LỆNH ĐANG CHẠY
-            # Đoạn này trước đây bị thiếu, giờ đã thêm vào để TSL hoạt động
             for pos in current_positions:
-                if pos.magic == config.MAGIC_NUMBER: # Chỉ xử lý lệnh của Bot
-                    self._apply_trailing_logic(pos)
+                if pos.magic == config.MAGIC_NUMBER: 
+                    self._apply_trailing_logic_v3(pos)
 
         except Exception as e:
             print(f"Lỗi update: {e}")
+
+    def _apply_trailing_logic_v3(self, position):
+        if not self.is_tsl_active(position.ticket): return
+        symbol = position.symbol
+        entry = position.price_open
+        current_sl = position.sl
+        current_price = position.price_current
+        volume = position.volume
+        is_buy = (position.type == mt5.ORDER_TYPE_BUY)
+        
+        preset_name = "SCALPING" 
+        if position.comment and position.comment.startswith("V2_"):
+            parts = position.comment.split("_")
+            if len(parts) > 1 and parts[1] in config.PRESETS: preset_name = parts[1]
+        
+        preset_params = config.PRESETS.get(preset_name, config.PRESETS["SCALPING"])
+        sl_pct = preset_params["SL_PERCENT"] / 100.0
+        r_distance = entry * sl_pct
+        if r_distance == 0: return
+        
+        current_dist_from_entry = current_price - entry if is_buy else entry - current_price
+        current_r_gain = current_dist_from_entry / r_distance
+
+        candidates = []
+        tsl_cfg = config.TSL_CONFIG
+        
+        # RULE 1: BE
+        if tsl_cfg["BE_ACTIVE"]:
+            if current_r_gain >= tsl_cfg.get("BE_OFFSET_RR", 0.8):
+                contract_size = mt5.symbol_info(symbol).trade_contract_size
+                comm_rate = config.COMMISSION_RATES.get(symbol, 0.0)
+                # [FIX CRASH] Use getattr
+                swap_val = getattr(position, 'swap', 0.0)
+                total_fee_usd = (comm_rate * volume) + abs(swap_val)
+                
+                if contract_size > 0: fee_dist = total_fee_usd / (volume * contract_size)
+                else: fee_dist = 0
+
+                mode = tsl_cfg.get("BE_MODE", "SOFT")
+                be_price = entry 
+                if mode == "SOFT": be_price = entry - fee_dist if is_buy else entry + fee_dist
+                elif mode == "SMART": be_price = entry + fee_dist if is_buy else entry - fee_dist
+                candidates.append((be_price, f"BE_{mode}"))
+
+        # RULE 2: PNL
+        if tsl_cfg["PNL_ACTIVE"]:
+            acc = self.connector.get_account_info()
+            if acc:
+                balance = acc['balance']
+                # [FIX CRASH] Use getattr
+                current_pnl = position.profit + getattr(position, 'swap', 0.0) + getattr(position, 'commission', 0.0)
+                pnl_pct = (current_pnl / balance) * 100
+                target_lock_pct = 0.0
+                for level in tsl_cfg["PNL_LEVELS"]:
+                    if pnl_pct >= level[0]: target_lock_pct = level[1]
+                
+                if target_lock_pct > 0:
+                    lock_usd = balance * (target_lock_pct / 100.0)
+                    contract_size = mt5.symbol_info(symbol).trade_contract_size
+                    lock_dist = lock_usd / (volume * contract_size)
+                    pnl_sl_price = entry + lock_dist if is_buy else entry - lock_dist
+                    candidates.append((pnl_sl_price, f"PNL_LOCK_{target_lock_pct}%"))
+
+        # RULE 3: STEP
+        if tsl_cfg["STEP_ACTIVE"]:
+            step_r = tsl_cfg.get("STEP_SIZE_RR", 0.5)
+            steps_climbed = math.floor(current_r_gain / step_r)
+            if steps_climbed >= 1:
+                lock_r = (steps_climbed * step_r) - 0.2 
+                if lock_r > 0:
+                    lock_dist = lock_r * r_distance
+                    step_sl_price = entry + lock_dist if is_buy else entry - lock_dist
+                    candidates.append((step_sl_price, "STEP_R"))
+
+        if not candidates: return
+
+        final_sl = None
+        chosen_rule = ""
+        strategy = tsl_cfg.get("STRATEGY", "BEST_PRICE")
+        
+        valid_candidates = []
+        for price, rule in candidates:
+            is_better = False
+            if is_buy:
+                if price > current_sl + 0.00001: is_better = True
+            else: 
+                if (current_sl == 0) or (price < current_sl - 0.00001): is_better = True
+            if is_better: valid_candidates.append((price, rule))
+        
+        if not valid_candidates: return
+
+        if strategy == "BEST_PRICE":
+            if is_buy: best = max(valid_candidates, key=lambda x: x[0])
+            else: best = min(valid_candidates, key=lambda x: x[0])
+            final_sl, chosen_rule = best
+        elif strategy == "PRIORITY_PNL":
+            pnl_cand = [x for x in valid_candidates if "PNL" in x[1]]
+            if pnl_cand: final_sl, chosen_rule = pnl_cand[-1]
+            else:
+                if is_buy: final_sl, chosen_rule = max(valid_candidates, key=lambda x: x[0])
+                else: final_sl, chosen_rule = min(valid_candidates, key=lambda x: x[0])
+        elif strategy == "PRIORITY_BE":
+            be_cand = [x for x in valid_candidates if "BE" in x[1]]
+            if be_cand: final_sl, chosen_rule = be_cand[0]
+            else:
+                if is_buy: final_sl, chosen_rule = max(valid_candidates, key=lambda x: x[0])
+                else: final_sl, chosen_rule = min(valid_candidates, key=lambda x: x[0])
+
+        if final_sl is not None:
+            point = mt5.symbol_info(symbol).point
+            final_sl = round(final_sl / point) * point
+            if abs(final_sl - current_sl) > 0.00001:
+                print(f"[TSL V3] {chosen_rule} | Ticket {position.ticket} | Dời SL về {final_sl}")
+                self.connector.modify_position(position.ticket, final_sl, position.tp)
 
     def toggle_tsl(self, ticket):
         disabled_list = self.state.get("tsl_disabled_tickets", [])
@@ -185,62 +273,3 @@ class TradeManager:
 
     def is_tsl_active(self, ticket):
         return ticket not in self.state.get("tsl_disabled_tickets", [])
-
-    def _apply_trailing_logic(self, position):
-        if not self.is_tsl_active(position.ticket): return
-
-        preset_name = "SCALPING" 
-        if position.comment and position.comment.startswith("V2_"):
-            parts = position.comment.split("_")
-            if len(parts) > 1 and parts[1] in config.PRESETS:
-                preset_name = parts[1]
-        
-        params = config.PRESETS[preset_name]
-        symbol = position.symbol
-        entry = position.price_open
-        current_sl = position.sl
-        current_price = position.price_current
-        
-        # Logic tính toán trailing giữ nguyên
-        estimated_risk_dist = entry * (params["SL_PERCENT"] / 100.0)
-        if estimated_risk_dist == 0: return
-
-        profit_dist = abs(current_price - entry)
-        current_r = profit_dist / estimated_risk_dist
-        
-        be_trigger = params["BE_TRIGGER_RR"]
-        step_r = params["TRAILING_STEP_RR"]
-        new_sl = None
-
-        if current_r >= be_trigger:
-            is_losing_sl = False
-            if position.type == 0: # BUY
-                if current_sl < entry - 0.00001: is_losing_sl = True
-            else: # SELL
-                if current_sl > entry + 0.00001: is_losing_sl = True
-            
-            # Kích hoạt Break-even (Dời về Entry)
-            if is_losing_sl: new_sl = entry
-
-            # Kích hoạt Trailing Step (Dời Dương)
-            if current_r >= (be_trigger + step_r):
-                steps_climbed = math.floor((current_r - be_trigger) / step_r)
-                if steps_climbed > 0:
-                    target_profit_r = steps_climbed * step_r
-                    target_profit_dist = target_profit_r * estimated_risk_dist
-                    
-                    if position.type == 0: # BUY
-                        candidate_sl = entry + target_profit_dist
-                        if candidate_sl > current_sl + 0.00001: new_sl = candidate_sl
-                    else: # SELL
-                        candidate_sl = entry - target_profit_dist
-                        if candidate_sl < current_sl - 0.00001 or current_sl == 0: new_sl = candidate_sl
-
-        if new_sl is not None:
-            point = mt5.symbol_info(symbol).point
-            new_sl = round(new_sl / point) * point
-            
-            # Chặn spam log nếu giá SL mới giống hệt giá cũ
-            if abs(new_sl - current_sl) > 0.00001:
-                print(f"[TRAILING] {preset_name} | Ticket {position.ticket}: Lãi {current_r:.2f}R. Dời SL về {new_sl}")
-                self.connector.modify_position(position.ticket, new_sl, position.tp)
