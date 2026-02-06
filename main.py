@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: main.py
-# V2.2.1: FIXED EXIT LOGIC, PRO FEE CALC & TSL PREVIEW ENHANCED
+# V3.2.5: FIX SCROLLBAR & SMART UI UPDATE
 
 import customtkinter as ctk
 import tkinter as tk
@@ -35,8 +35,8 @@ FONT_PNL = ("Roboto", 18, "bold")
 FONT_SECTION = ("Roboto", 12, "bold")
 FONT_BIG_VAL = ("Consolas", 20, "bold")
 FONT_PRICE = ("Roboto", 32, "bold")
-FONT_TREE = ("Roboto", 12) 
-FONT_TREE_HEAD = ("Roboto", 12, "bold")
+FONT_TREE = ("Consolas", 11) 
+FONT_TREE_HEAD = ("Roboto", 11, "bold")
 FONT_FEE = ("Roboto", 13, "bold") 
 
 # Colors
@@ -52,8 +52,9 @@ class BotUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("PRO SCALPING V2.2.1 - STABLE")
-        self.geometry("1450x950")
+        self.title("PRO SCALPING V3.2.5 - FIXED UI")
+        # TĂNG SIZE CỬA SỔ ĐỂ ĐỦ CHỖ HIỂN THỊ
+        self.geometry("1600x950")
         
         # --- Variables ---
         self.var_strict_mode = tk.BooleanVar(value=config.STRICT_MODE_DEFAULT)
@@ -93,16 +94,14 @@ class BotUI(ctk.CTk):
         self.frm_right.grid(row=0, column=1, sticky="nswe", padx=10, pady=10)
         self.setup_right_panel(self.frm_right)
 
-        # Đăng ký sự kiện đóng cửa sổ
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.thread = threading.Thread(target=self.bg_update_loop, daemon=True)
         self.thread.start()
         
-        self.log_message("System V2.2.1 Initialized.")
+        self.log_message("System V3.2.5 Layout Fix Initialized.")
 
     def on_closing(self):
-        """Hàm xử lý khi đóng ứng dụng để thoát sạch sẽ"""
         self.running = False
         self.log_message("Hệ thống đang dừng...")
         try:
@@ -258,9 +257,10 @@ class BotUI(ctk.CTk):
             self.check_labels[name] = l
 
     def setup_right_panel(self, parent):
+        # HEADER
         f_head = ctk.CTkFrame(parent, fg_color="transparent", height=30)
         f_head.pack(fill="x", pady=(0, 5))
-        ctk.CTkLabel(f_head, text="RUNNING TRADES", font=("Roboto", 16, "bold")).pack(side="left")
+        ctk.CTkLabel(f_head, text="RUNNING TRADES (Realtime)", font=("Roboto", 16, "bold")).pack(side="left")
         ctk.CTkButton(f_head, text="History", width=80, height=24, command=self.show_history_popup, fg_color="#444").pack(side="right")
 
         f_tree_container = ctk.CTkFrame(parent, fg_color="#2b2b2b")
@@ -268,28 +268,46 @@ class BotUI(ctk.CTk):
 
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", rowheight=35, font=FONT_TREE)
-        style.configure("Treeview.Heading", background="#1f1f1f", foreground="white", font=FONT_TREE_HEAD, relief="flat")
+        # Rowheight 35, Font Consolas
+        style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", 
+                        rowheight=35, font=("Consolas", 11)) 
+        style.configure("Treeview.Heading", background="#1f1f1f", foreground="#e0e0e0", font=("Roboto", 10, "bold"), relief="flat")
         style.map("Treeview", background=[('selected', '#3949ab')])
 
-        cols = ("Time", "Symbol", "Type", "Vol", "Entry", "SL", "TP", "PnL", "Status", "X")
+        # --- SETUP CỘT CHO BẢNG ---
+        cols = ("Time", "Order", "Targets", "Fee", "RR", "PnL", "Status", "X")
         self.tree = ttk.Treeview(f_tree_container, columns=cols, show="headings", style="Treeview")
         
-        headers = ["Time", "Coin", "Type", "Vol", "Entry", "SL", "TP", "PnL", "Status", "✖"]
-        widths = [70, 60, 40, 50, 80, 70, 70, 70, 200, 30] 
-        for c, h, w in zip(cols, headers, widths):
+        headers = ["Time", "Order Info (@Entry)", "Targets (SL | TP)", "Fee | Swap", "Risk | Reward (%)", "PnL", "Status", "✖"]
+        
+        # --- FIXED LAYOUT: Đã thêm stretch=False và tăng Width ---
+        # Tổng width ~ 1300px, đủ để thanh scrollbar hiện ra nếu màn hình bé
+        widths = [110, 280, 180, 200, 250, 120, 150, 40]
+        anchors= ["center", "w", "center", "center", "center", "center", "w", "center"]
+
+        for c, h, w, a in zip(cols, headers, widths, anchors):
             self.tree.heading(c, text=h)
-            self.tree.column(c, width=w, anchor="center")
+            # QUAN TRỌNG: stretch=False giúp cột không bị tự co lại, cho phép kéo giãn & cuộn ngang
+            self.tree.column(c, width=w, anchor=a, minwidth=w, stretch=False)
 
         sb = ttk.Scrollbar(f_tree_container, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscroll=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
-        sb.pack(side="right", fill="y", padx=2, pady=2)
+        # SCROLLBAR NGANG
+        sb_x = ttk.Scrollbar(f_tree_container, orient="horizontal", command=self.tree.xview)
+        
+        self.tree.configure(yscroll=sb.set, xscroll=sb_x.set)
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+        
+        f_tree_container.grid_rowconfigure(0, weight=1)
+        f_tree_container.grid_columnconfigure(0, weight=1)
 
         self.tree.bind('<ButtonRelease-1>', self.on_tree_click)
         self.tree.bind('<Button-3>', self.on_tree_right_click)
 
-        f_log = ctk.CTkFrame(parent, height=380, fg_color="#1e1e1e")
+        # LOGGING SECTION
+        f_log = ctk.CTkFrame(parent, height=350, fg_color="#1e1e1e")
         f_log.pack(fill="x", pady=(10, 0))
         f_log.pack_propagate(False)
 
@@ -341,17 +359,12 @@ class BotUI(ctk.CTk):
         self.after(0, _write)
 
     def get_fee_config(self, symbol):
-        """Hàm tính Fee đã sửa lỗi tài khoản PRO/STANDARD"""
         acc_type = self.cbo_account_type.get()
-        # Ưu tiên loại tài khoản: PRO/STANDARD không phí
         if acc_type in ["PRO", "STANDARD"]:
             return 0.0
-        
-        # Nếu là RAW/ZERO mới xét phí cụ thể theo coin hoặc phí mặc định
         specific_rate = config.COMMISSION_RATES.get(symbol, 0.0)
         if specific_rate > 0: 
             return specific_rate
-            
         acc_cfg = config.ACCOUNT_TYPES_CONFIG.get(acc_type, config.ACCOUNT_TYPES_CONFIG["STANDARD"])
         return acc_cfg.get("COMMISSION_PER_LOT", 0.0)
 
@@ -388,8 +401,10 @@ class BotUI(ctk.CTk):
         region = self.tree.identify("region", event.x, event.y)
         if region == "cell":
             col = self.tree.identify_column(event.x)
-            row = self.tree.identify_row(event.y)
-            if row and col == "#10": self.handle_close_request(int(row))
+            row_id = self.tree.identify_row(event.y)
+            # Cột X là cột số 8 (#8)
+            # row_id bây giờ là ticket dạng string
+            if row_id and col == "#8": self.handle_close_request(int(row_id))
 
     def on_tree_right_click(self, event):
         row_id = self.tree.identify_row(event.y)
@@ -455,71 +470,112 @@ class BotUI(ctk.CTk):
     def open_preset_config_popup(self):
         p_name = self.cbo_preset.get()
         data = config.PRESETS.get(p_name, {})
+        
         top = ctk.CTkToplevel(self)
         top.title(f"Config: {p_name}")
-        top.geometry("300x250")
+        top.geometry("300x320")
         top.attributes("-topmost", True)
+        
         ctk.CTkLabel(top, text=f"PRESET: {p_name}", font=FONT_BOLD).pack(pady=10)
+        
+        ctk.CTkLabel(top, text="Risk per Trade (%)").pack()
+        e_risk = ctk.CTkEntry(top, justify="center")
+        current_risk = data.get("RISK_PERCENT", config.RISK_PER_TRADE_PERCENT)
+        e_risk.insert(0, str(current_risk))
+        e_risk.pack()
+
         ctk.CTkLabel(top, text="SL (%)").pack()
-        e_sl = ctk.CTkEntry(top, justify="center"); e_sl.insert(0, str(data.get("SL_PERCENT", 0.5))); e_sl.pack()
+        e_sl = ctk.CTkEntry(top, justify="center")
+        e_sl.insert(0, str(data.get("SL_PERCENT", 0.5)))
+        e_sl.pack()
+        
         ctk.CTkLabel(top, text="TP (R)").pack()
-        e_tp = ctk.CTkEntry(top, justify="center"); e_tp.insert(0, str(data.get("TP_RR_RATIO", 2.0))); e_tp.pack()
+        e_tp = ctk.CTkEntry(top, justify="center")
+        e_tp.insert(0, str(data.get("TP_RR_RATIO", 2.0)))
+        e_tp.pack()
+        
         def save():
-            config.PRESETS[p_name]["SL_PERCENT"] = float(e_sl.get())
-            config.PRESETS[p_name]["TP_RR_RATIO"] = float(e_tp.get())
-            self.save_settings(); top.destroy()
+            try:
+                config.PRESETS[p_name]["RISK_PERCENT"] = float(e_risk.get())
+                config.PRESETS[p_name]["SL_PERCENT"] = float(e_sl.get())
+                config.PRESETS[p_name]["TP_RR_RATIO"] = float(e_tp.get())
+                self.save_settings()
+                top.destroy()
+                self.log_message(f"Updated Preset {p_name}: Risk {e_risk.get()}%")
+            except Exception as e:
+                messagebox.showerror("Error", f"Invalid input: {e}")
+
         ctk.CTkButton(top, text="SAVE", command=save, fg_color=COL_GREEN).pack(pady=20, fill="x", padx=30)
 
     def open_tsl_popup(self):
         top = ctk.CTkToplevel(self)
-        top.title("TSL Config V2.2")
-        top.geometry("420x650") 
+        top.title("TSL Config V3.2")
+        top.geometry("400x520") 
         top.attributes("-topmost", True)
 
         def sec(t):
-            ctk.CTkLabel(top, text=t, font=("Roboto", 12, "bold"), text_color="#03A9F4").pack(fill="x", padx=20, pady=(15, 5), anchor="w")
+            ctk.CTkLabel(top, text=t, font=("Roboto", 12, "bold"), text_color="#03A9F4").pack(fill="x", padx=15, pady=(10, 2), anchor="w")
             return ctk.CTkFrame(top, fg_color="transparent")
 
+        # --- 1. BREAK-EVEN (BE) ---
         f2 = sec("1. BREAK-EVEN (BE)")
-        f2.pack(fill="x", padx=20)
-        cbo_be = ctk.CTkOptionMenu(f2, values=["SOFT", "SMART"])
-        cbo_be.set(config.TSL_CONFIG.get("BE_MODE", "SOFT")); cbo_be.pack(fill="x")
-        f_be_off = ctk.CTkFrame(f2, fg_color="transparent"); f_be_off.pack(fill="x", pady=(5,0))
-        ctk.CTkLabel(f_be_off, text="Offset (Points):").pack(side="left")
-        e_be_pts = ctk.CTkEntry(f_be_off, width=60); e_be_pts.insert(0, str(config.TSL_CONFIG.get("BE_OFFSET_POINTS", 0))); e_be_pts.pack(side="right")
+        f2.pack(fill="x", padx=15)
+        
+        r1 = ctk.CTkFrame(f2, fg_color="transparent"); r1.pack(fill="x", pady=2)
+        ctk.CTkLabel(r1, text="Mode:").pack(side="left")
+        cbo_be = ctk.CTkOptionMenu(r1, values=["SOFT", "SMART"], width=100)
+        cbo_be.set(config.TSL_CONFIG.get("BE_MODE", "SOFT")); cbo_be.pack(side="right")
+        
+        r2 = ctk.CTkFrame(f2, fg_color="transparent"); r2.pack(fill="x", pady=2)
+        ctk.CTkLabel(r2, text="Trigger(R):").pack(side="left")
+        e_be_rr = ctk.CTkEntry(r2, width=50)
+        e_be_rr.insert(0, str(config.TSL_CONFIG.get("BE_OFFSET_RR", 0.8))); e_be_rr.pack(side="left", padx=(5,10))
+        
+        e_be_pts = ctk.CTkEntry(r2, width=50); 
+        e_be_pts.insert(0, str(config.TSL_CONFIG.get("BE_OFFSET_POINTS", 0))); e_be_pts.pack(side="right")
+        ctk.CTkLabel(r2, text="Offset(Pts):").pack(side="right", padx=5)
 
+        # --- 2. PNL LOCK --- 
         f3 = sec("2. PNL LOCK (Levels)")
-        f3.pack(fill="both", expand=True, padx=20)
-        f_pnl_scroll = ctk.CTkScrollableFrame(f3, height=150); f_pnl_scroll.pack(fill="both", expand=True)
+        f3.pack(fill="both", expand=True, padx=15)
+        
+        f_pnl_scroll = ctk.CTkScrollableFrame(f3, height=100); f_pnl_scroll.pack(fill="both", expand=True)
         pnl_entries = []
         def add_pnl_row(v1=0.0, v2=0.0):
             r = ctk.CTkFrame(f_pnl_scroll, fg_color="transparent"); r.pack(fill="x", pady=2)
-            e1 = ctk.CTkEntry(r, width=70); e1.insert(0, str(v1)); e1.pack(side="left")
-            ctk.CTkLabel(r, text="% Profit -> Lock %", text_color="gray").pack(side="left", padx=10)
-            e2 = ctk.CTkEntry(r, width=70); e2.insert(0, str(v2)); e2.pack(side="right")
+            e1 = ctk.CTkEntry(r, width=60); e1.insert(0, str(v1)); e1.pack(side="left")
+            ctk.CTkLabel(r, text="% Win -> Lock %", text_color="gray", font=("Roboto",11)).pack(side="left", padx=5)
+            e2 = ctk.CTkEntry(r, width=60); e2.insert(0, str(v2)); e2.pack(side="right")
             pnl_entries.append((r, e1, e2))
         for lvl in config.TSL_CONFIG.get("PNL_LEVELS", []): add_pnl_row(lvl[0], lvl[1])
-        f_pbtns = ctk.CTkFrame(f3, fg_color="transparent"); f_pbtns.pack(fill="x", pady=5)
-        ctk.CTkButton(f_pbtns, text="+ Add", width=60, command=lambda: add_pnl_row(0.0, 0.0)).pack(side="left", padx=5)
-        ctk.CTkButton(f_pbtns, text="- Del", width=60, command=lambda: pnl_entries.pop()[0].destroy() if pnl_entries else None).pack(side="right", padx=5)
+        
+        f_pbtns = ctk.CTkFrame(f3, fg_color="transparent"); f_pbtns.pack(fill="x", pady=2)
+        ctk.CTkButton(f_pbtns, text="+", width=40, command=lambda: add_pnl_row(0.0, 0.0)).pack(side="left", padx=5)
+        ctk.CTkButton(f_pbtns, text="-", width=40, command=lambda: pnl_entries.pop()[0].destroy() if pnl_entries else None).pack(side="right", padx=5)
 
+        # --- 3. STEP R --- 
         f4 = sec("3. STEP R (Nuôi Lệnh)")
-        f4.pack(fill="x", padx=20)
-        r_s1 = ctk.CTkFrame(f4, fg_color="transparent"); r_s1.pack(fill="x", pady=2)
-        ctk.CTkLabel(r_s1, text="Step Size (R):").pack(side="left")
-        e_step_size = ctk.CTkEntry(r_s1, width=80); e_step_size.insert(0, str(config.TSL_CONFIG.get("STEP_R_SIZE", 1.0))); e_step_size.pack(side="right")
-        r_s2 = ctk.CTkFrame(f4, fg_color="transparent"); r_s2.pack(fill="x", pady=2)
-        ctk.CTkLabel(r_s2, text="Lock Ratio (0-1):").pack(side="left")
-        e_step_ratio = ctk.CTkEntry(r_s2, width=80); e_step_ratio.insert(0, str(config.TSL_CONFIG.get("STEP_R_RATIO", 0.8))); e_step_ratio.pack(side="right")
+        f4.pack(fill="x", padx=15)
+        r_step = ctk.CTkFrame(f4, fg_color="transparent"); r_step.pack(fill="x", pady=2)
+        
+        ctk.CTkLabel(r_step, text="Size(R):").pack(side="left")
+        e_step_size = ctk.CTkEntry(r_step, width=50); e_step_size.insert(0, str(config.TSL_CONFIG.get("STEP_R_SIZE", 1.0))); e_step_size.pack(side="left", padx=(5,10))
+        
+        e_step_ratio = ctk.CTkEntry(r_step, width=50); e_step_ratio.insert(0, str(config.TSL_CONFIG.get("STEP_R_RATIO", 0.8))); e_step_ratio.pack(side="right")
+        ctk.CTkLabel(r_step, text="Lock(0-1):").pack(side="right", padx=5)
 
         def save_cfg():
             config.TSL_CONFIG["BE_MODE"] = cbo_be.get()
+            config.TSL_CONFIG["BE_OFFSET_RR"] = float(e_be_rr.get() or 0.8) 
             config.TSL_CONFIG["BE_OFFSET_POINTS"] = float(e_be_pts.get() or 0)
             config.TSL_CONFIG["PNL_LEVELS"] = sorted([[float(e1.get()), float(e2.get())] for r,e1,e2 in pnl_entries if e1.get()], key=lambda x:x[0])
             config.TSL_CONFIG["STEP_R_SIZE"] = float(e_step_size.get() or 1.0)
             config.TSL_CONFIG["STEP_R_RATIO"] = float(e_step_ratio.get() or 0.8)
-            self.save_settings(); top.destroy()
-        ctk.CTkButton(top, text="SAVE CONFIG", height=40, font=("Roboto", 13, "bold"), command=save_cfg).pack(pady=20, fill="x", padx=40)
+            self.save_settings()
+            top.destroy()
+            self.log_message("Đã cập nhật cấu hình TSL.")
+
+        ctk.CTkButton(top, text="SAVE CONFIG", height=35, font=("Roboto", 13, "bold"), command=save_cfg, fg_color=COL_GREEN).pack(pady=15, fill="x", padx=40)
 
     def reset_daily_stats(self):
         if messagebox.askyesno("Confirm", "Reset Daily Stats?"):
@@ -546,6 +602,10 @@ class BotUI(ctk.CTk):
         self.var_direction.set(d)
         cur_tactic_str = self.get_current_tactic_string()
 
+        # Biến số dư để tính %
+        balance = acc['balance'] if acc else 1.0
+        if balance == 0: balance = 1.0
+
         if acc: 
             self.lbl_equity.configure(text=f"${acc['equity']:,.2f}")
             self.lbl_acc_info.configure(text=f"ID: {acc['login']} | Server: {acc['server']}")
@@ -564,22 +624,25 @@ class BotUI(ctk.CTk):
             name, stt, msg = item["name"], item["status"], item["msg"]
             if name in self.check_labels:
                 self.check_labels[name].configure(text=f"{'✔' if stt=='OK' else '✖'} {name}: {msg}", 
-                                                   text_color=COL_GREEN if stt=="OK" else (COL_WARN if stt=="WARN" else COL_RED))
+                                                    text_color=COL_GREEN if stt=="OK" else (COL_WARN if stt=="WARN" else COL_RED))
 
         if tick and acc:
             params = config.PRESETS.get(preset, config.PRESETS["SCALPING"])
+            
+            current_risk_pct = params.get("RISK_PERCENT", config.RISK_PER_TRADE_PERCENT)
+            
             try: mlot = float(self.var_manual_lot.get() or 0)
             except: mlot = 0.0
             
             f_lot = mlot if mlot > 0 else 0
             if f_lot == 0:
-                risk_usd = acc['equity'] * (config.RISK_PER_TRADE_PERCENT/100)
+                risk_usd = acc['equity'] * (current_risk_pct/100)
                 sl_dist = cur_price * (params["SL_PERCENT"]/100)
                 if sl_dist > 0: f_lot = max(config.MIN_LOT_SIZE, min(round((risk_usd / (sl_dist * c_size)) / config.LOT_STEP) * config.LOT_STEP, config.MAX_LOT_SIZE))
 
+            # FORMAT LOT SIZE
             self.lbl_prev_lot.configure(text=f"{'(MANUAL)' if mlot>0 else '(AUTO)'} LOT: {f_lot:.2f}", text_color="white" if mlot==0 else "#FFD700")
             
-            # --- FIX FEE CALCULATION ---
             comm_rate = self.get_fee_config(sym)
             comm_total = comm_rate * f_lot
             spread_cost = (tick.ask - tick.bid) * f_lot * c_size
@@ -592,58 +655,151 @@ class BotUI(ctk.CTk):
             p_sl = msl if msl > 0 else (cur_price - auto_sl_dist if d=="BUY" else cur_price + auto_sl_dist)
             p_tp = mtp if mtp > 0 else (cur_price + abs(cur_price - p_sl) * params["TP_RR_RATIO"] if d=="BUY" else cur_price - abs(cur_price - p_sl) * params["TP_RR_RATIO"])
             
-            self.lbl_prev_sl.configure(text=f"{p_sl:.2f}"); self.lbl_prev_risk.configure(text=f"-${(abs(cur_price-p_sl)*f_lot*c_size):.2f}")
-            self.lbl_prev_tp.configure(text=f"{p_tp:.2f}"); self.lbl_prev_rew.configure(text=f"+${(abs(p_tp-cur_price)*f_lot*c_size):.2f}")
+            # 1. Check SL Logic & DISPLAY %
+            is_valid_sl = True
+            if d == "BUY" and p_sl >= cur_price: is_valid_sl = False
+            if d == "SELL" and p_sl <= cur_price: is_valid_sl = False
+            
+            if is_valid_sl:
+                self.lbl_prev_sl.configure(text=f"{p_sl:.2f}", text_color=COL_RED)
+                loss_dist = abs(cur_price - p_sl) 
+                loss_val = loss_dist * f_lot * c_size
+                loss_pct = (loss_val / balance) * 100
+                self.lbl_prev_risk.configure(text=f"-${loss_val:.2f} ({loss_pct:.2f}%)", text_color=COL_RED)
+            else:
+                self.lbl_prev_sl.configure(text="INVALID", text_color=COL_WARN)
+                self.lbl_prev_risk.configure(text="$ ---", text_color=COL_WARN)
 
-            # --- V2.2.1 TSL PREVIEW ENHANCED ---
-            tsl_previews = []
-            one_r = abs(cur_price - p_sl)
-            t_cfg = config.TSL_CONFIG
-            is_buy = (d == "BUY")
+            # 2. Check TP Logic & DISPLAY %
+            is_valid_tp = True
+            if d == "BUY" and p_tp <= cur_price: is_valid_tp = False
+            if d == "SELL" and p_tp >= cur_price: is_valid_tp = False
+            
+            if is_valid_tp:
+                self.lbl_prev_tp.configure(text=f"{p_tp:.2f}", text_color=COL_GREEN)
+                prof_dist = abs(p_tp - cur_price)
+                prof_val = prof_dist * f_lot * c_size
+                prof_pct = (prof_val / balance) * 100
+                self.lbl_prev_rew.configure(text=f"+${prof_val:.2f} ({prof_pct:.2f}%)", text_color=COL_GREEN)
+            else:
+                self.lbl_prev_tp.configure(text="INVALID", text_color=COL_WARN)
+                self.lbl_prev_rew.configure(text="$ ---", text_color=COL_WARN)
 
-            # 1. BE Logic Preview
-            if "BE" in cur_tactic_str:
-                mode = t_cfg.get("BE_MODE", "SOFT")
-                be_pts = t_cfg.get("BE_OFFSET_POINTS", 0)
-                trig_be = cur_price + (one_r * t_cfg.get("BE_OFFSET_RR", 0.8)) if is_buy else cur_price - (one_r * t_cfg.get("BE_OFFSET_RR", 0.8))
-                fee_d = (comm_total + spread_cost) / (f_lot * c_size) if (f_lot * c_size) > 0 else 0
-                base_be = cur_price - fee_d if (is_buy and mode=="SOFT") else (cur_price + fee_d if (is_buy and mode=="SMART") else cur_price)
-                if not is_buy: base_be = cur_price + fee_d if mode=="SOFT" else (cur_price - fee_d if mode=="SMART" else cur_price)
-                sl_be = base_be + (be_pts * point) if is_buy else base_be - (be_pts * point)
-                tsl_previews.append({"name": f"BE ({mode})", "trig": trig_be, "sl": sl_be, "prio": 1})
-
-            # 2. STEP Logic Preview
-            if "STEP_R" in cur_tactic_str:
-                sz, rt = t_cfg.get("STEP_R_SIZE", 1.0), t_cfg.get("STEP_R_RATIO", 0.8)
-                trig_s1 = cur_price + (sz * one_r) if is_buy else cur_price - (sz * one_r)
-                sl_s1 = cur_price + (sz * one_r * rt) if is_buy else cur_price - (sz * one_r * rt)
-                tsl_previews.append({"name": f"STEP 1", "trig": trig_s1, "sl": sl_s1, "prio": 3})
-
-            # 3. PNL Logic Preview
-            if "PNL" in cur_tactic_str and t_cfg.get("PNL_LEVELS"):
-                lvl = t_cfg["PNL_LEVELS"][0]
-                target_money = acc['balance'] * (lvl[0]/100.0)
-                req_d = target_money / (f_lot * c_size) if (f_lot * c_size) > 0 else 0
-                trig_p = cur_price + req_d if is_buy else cur_price - req_d
-                lock_p = cur_price + (req_d * (lvl[1]/lvl[0])) if is_buy and lvl[0]>0 else cur_price
-                tsl_previews.append({"name": f"PNL {lvl[0]}%", "trig": trig_p, "sl": lock_p, "prio": 2})
-
-            if not tsl_previews:
+            # --- CẬP NHẬT TSL PREVIEW (NEXT MILESTONE) ---
+            if cur_tactic_str == "OFF":
                 self.lbl_tsl_preview.configure(text="TSL: OFF")
             else:
-                # Chọn cái ưu tiên hiển thị cao nhất (STEP > PNL > BE)
-                best = sorted(tsl_previews, key=lambda x: x['prio'], reverse=True)[0]
-                self.lbl_tsl_preview.configure(text=f"Mục tiêu: [{best['name']}] {best['trig']:.2f} ➔ SL: {best['sl']:.2f}")
+                milestones = []
+                one_r_dist = abs(cur_price - p_sl)
+                is_buy = (d == "BUY")
+                t_cfg = config.TSL_CONFIG
+                
+                if "BE" in cur_tactic_str and one_r_dist > 0:
+                    trig_r = t_cfg.get("BE_OFFSET_RR", 0.8)
+                    trig_p = cur_price + (one_r_dist * trig_r) if is_buy else cur_price - (one_r_dist * trig_r)
+                    fee_d = (comm_total + spread_cost) / (f_lot * c_size) if (f_lot * c_size) > 0 else 0
+                    mode = t_cfg.get("BE_MODE", "SOFT")
+                    base = cur_price - fee_d if (is_buy and mode=="SOFT") else (cur_price + fee_d if (is_buy and mode=="SMART") else cur_price)
+                    if not is_buy: base = cur_price + fee_d if mode=="SOFT" else (cur_price - fee_d if mode=="SMART" else cur_price)
+                    be_sl = base + (t_cfg.get("BE_OFFSET_POINTS", 0) * point) if is_buy else base - (t_cfg.get("BE_OFFSET_POINTS", 0) * point)
+                    milestones.append((abs(cur_price - trig_p), f"BE | {trig_p:.2f} -> {be_sl:.2f}"))
 
-        # Update Table
-        for item in self.tree.get_children(): self.tree.delete(item)
+                if "STEP_R" in cur_tactic_str and one_r_dist > 0:
+                    sz, rt = t_cfg.get("STEP_R_SIZE", 1.0), t_cfg.get("STEP_R_RATIO", 0.8)
+                    n_trig = cur_price + (sz * one_r_dist) if is_buy else cur_price - (sz * one_r_dist)
+                    n_sl = cur_price + (sz * one_r_dist * rt) if is_buy else cur_price - (sz * one_r_dist * rt)
+                    milestones.append((abs(cur_price - n_trig), f"Step 1 | {n_trig:.2f} -> {n_sl:.2f}"))
+
+                if "PNL" in cur_tactic_str and t_cfg.get("PNL_LEVELS") and acc:
+                    lvl = t_cfg["PNL_LEVELS"][0]
+                    req_profit_usd = acc['balance'] * (lvl[0]/100.0)
+                    trig_p = cur_price + (req_profit_usd / (f_lot * c_size)) if is_buy else \
+                             cur_price - (req_profit_usd / (f_lot * c_size))
+                    milestones.append((abs(cur_price - trig_p), f"PnL {lvl[0]}% | {trig_p:.2f}"))
+
+                if milestones:
+                    closest = sorted(milestones, key=lambda x: x[0])[0][1]
+                    self.lbl_tsl_preview.configure(text=f"Mục tiêu: {closest}")
+                else:
+                    self.lbl_tsl_preview.configure(text="TSL: Monitoring...")
+
+        # --- LOGIC UPDATE UI MỚI (SMART UPDATE - CHỐNG GIẬT) ---
+        existing_items = self.tree.get_children() # List of IDs (tickets)
+        current_tickets_on_chart = []
+        
         for p in positions:
-            pnl_val = p.profit + getattr(p, 'swap', 0) + getattr(p, 'commission', 0)
+            ticket_str = str(p.ticket)
+            current_tickets_on_chart.append(ticket_str)
+
+            p_tick = mt5.symbol_info_tick(p.symbol)
+            p_sym_info = mt5.symbol_info(p.symbol)
+            p_c_size = p_sym_info.trade_contract_size if p_sym_info else 1.0
+            
+            comm_val = getattr(p, 'commission', 0.0)
+            swap_val = getattr(p, 'swap', 0.0)
+            
+            # Tính Spread Cost
+            current_spread = (p_tick.ask - p_tick.bid) if p_tick else 0.0
+            spread_cost_usd = current_spread * p.volume * p_c_size
+            
+            entry_fee = comm_val - spread_cost_usd 
+            fee_str = f"Fee: ${entry_fee:.2f} | Sw: ${swap_val:.2f}"
+            
+            time_str = datetime.fromtimestamp(p.time).strftime("%d/%m %H:%M")
+
+            is_buy = (p.type == mt5.ORDER_TYPE_BUY)
+            icon = "🟢" if is_buy else "🔴"
+            side_txt = "BUY" if is_buy else "SELL"
+            
+            order_str = f"{icon} {side_txt} {p.volume:.2f} {p.symbol} @ {p.price_open:.2f}"
+            sl_txt = f"{p.sl:.2f}" if p.sl > 0 else "---"
+            tp_txt = f"{p.tp:.2f}" if p.tp > 0 else "---"
+            targets_str = f"{sl_txt}  |  {tp_txt}"
+
+            risk_usd = abs(p.price_open - p.sl) * p.volume * p_c_size if p.sl > 0 else 0
+            rew_usd = abs(p.price_open - p.tp) * p.volume * p_c_size if p.tp > 0 else 0
+            
+            risk_pct = (risk_usd / balance * 100) if balance > 0 else 0
+            rew_pct = (rew_usd / balance * 100) if balance > 0 else 0
+            
+            is_sl_in_profit = False
+            if is_buy and p.sl > p.price_open: is_sl_in_profit = True
+            if not is_buy and p.sl > 0 and p.sl < p.price_open: is_sl_in_profit = True
+            
+            if p.sl == 0:
+                risk_str = "No SL"
+            elif is_sl_in_profit:
+                risk_str = f"+${risk_usd:.1f} ({risk_pct:.1f}%)" 
+            else:
+                risk_str = f"-${risk_usd:.1f} ({risk_pct:.1f}%)"
+
+            rew_str = f"+${rew_usd:.1f} ({rew_pct:.1f}%)" if p.tp > 0 else "No TP"
+            rr_str = f"{risk_str}  |  {rew_str}"
+
             stt_txt = self.tsl_states_map.get(p.ticket, "Running")
-            self.tree.insert("", "end", iid=p.ticket, values=(
-                datetime.fromtimestamp(p.time).strftime("%d/%m %H:%M"), p.symbol, "BUY" if p.type==0 else "SELL", p.volume, 
-                f"{p.price_open:.2f}", f"{p.sl:.2f}", f"{p.tp:.2f}", f"{pnl_val:.2f}", stt_txt, "❌"
-            ))
+
+            # Data row
+            values_data = (
+                time_str,
+                order_str,
+                targets_str,
+                fee_str,
+                rr_str,
+                f"${p.profit:.2f}",
+                stt_txt,
+                "❌"
+            )
+
+            # NẾU TICKET ĐÃ CÓ TRÊN BẢNG -> CHỈ CẬP NHẬT (KHÔNG INSERT LẠI)
+            if ticket_str in existing_items:
+                self.tree.item(ticket_str, values=values_data)
+            else:
+                self.tree.insert("", "end", iid=ticket_str, values=values_data)
+
+        # XÓA CÁC DÒNG KHÔNG CÒN TỒN TẠI (ĐÃ ĐÓNG LỆNH)
+        for item in existing_items:
+            if item not in current_tickets_on_chart:
+                self.tree.delete(item)
 
     def handle_close_request(self, ticket):
         if self.var_confirm_close.get() and not messagebox.askyesno("Confirm", f"Close #{ticket}?"): return
@@ -653,14 +809,22 @@ class BotUI(ctk.CTk):
         d, s, p, t = self.seg_direction.get(), self.cbo_symbol.get(), self.cbo_preset.get(), self.get_current_tactic_string()
         try: ml, mt, ms = float(self.var_manual_lot.get() or 0), float(self.var_manual_tp.get() or 0), float(self.var_manual_sl.get() or 0)
         except: ml=0
+        
         self.log_message(f"Exec {d} {s} | TSL: [{t}]...")
-        threading.Thread(target=lambda: self.trade_mgr.execute_manual_trade(d, p, s, self.var_strict_mode.get(), ml, mt, ms, self.var_bypass_checklist.get(), t)).start()
+        
+        def run_trade_thread():
+            result = self.trade_mgr.execute_manual_trade(d, p, s, self.var_strict_mode.get(), ml, mt, ms, self.var_bypass_checklist.get(), t)
+            if "SUCCESS" not in result:
+                self.log_message(f"❌ EXEC FAILED: {result}", error=True)
+
+        threading.Thread(target=run_trade_thread).start()
 
     def show_history_popup(self):
         top = ctk.CTkToplevel(self); top.title("History"); top.geometry("700x450")
         tr = ttk.Treeview(top, columns=("Time", "Sym", "Type", "PnL", "Reason"), show="headings"); tr.pack(fill="both", expand=True)
         for c in tr["columns"]: tr.heading(c, text=c)
-        for h in self.trade_mgr.state.get("daily_history", []): tr.insert("", "end", values=(h['time'], h['symbol'], h['type'], f"${h['profit']:.2f}", h.get('reason','')))
+        for h in self.trade_mgr.state.get("daily_history", []): 
+            tr.insert("", "end", values=(h['time'], h['symbol'], h['type'], f"${h['profit']:.2f}", h.get('reason','')))
 
 if __name__ == "__main__":
     try:

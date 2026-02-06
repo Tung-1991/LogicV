@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# V2.2.1: FIXED PRO FEE LOGIC & ENHANCED MULTI-TSL STATUS DISPLAY
+# V3.1.0: IMPLEMENT DYNAMIC RISK FROM PRESETS
 
 import logging
 import config
@@ -26,7 +26,7 @@ class TradeManager:
         else: print(msg)
 
     def get_trade_tactic(self, ticket):
-        """Lấy combo tactic đang chạy cho lệnh (Ví dụ: 'BE+STEP_R')"""
+        """Lấy combo tactic đang chạy cho lệnh"""
         return self.state.get("trade_tactics", {}).get(str(ticket), "OFF")
 
     def update_trade_tactic(self, ticket, new_tactic_str):
@@ -70,7 +70,12 @@ class TradeManager:
         if manual_lot > 0: lot_size = manual_lot
         else:
             if sl_distance == 0: return "ERR_CALC_SL"
-            risk_usd = equity * (config.RISK_PER_TRADE_PERCENT / 100.0)
+            
+            # --- [UPDATED] DYNAMIC RISK CALCULATION ---
+            # Lấy Risk % từ Preset, nếu không có thì lấy Default Config
+            current_risk_pct = params.get("RISK_PERCENT", config.RISK_PER_TRADE_PERCENT)
+            risk_usd = equity * (current_risk_pct / 100.0)
+            
             raw_lot = risk_usd / (sl_distance * contract_size)
             if raw_lot < config.MIN_LOT_SIZE: return f"ERR_LOT_TOO_SMALL|Risk:${risk_usd:.2f}"
             steps = round(raw_lot / config.LOT_STEP)
@@ -92,7 +97,7 @@ class TradeManager:
         order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
         comment = f"V8_{preset_name}" 
         
-        self.log(f"🚀 Exec {direction} {symbol} | Vol: {lot_size} | TSL: [{tsl_mode.replace('+', '/')}]")
+        self.log(f"🚀 Exec {direction} {symbol} | Vol: {lot_size} | Risk: {params.get('RISK_PERCENT', config.RISK_PER_TRADE_PERCENT)}% | TSL: [{tsl_mode.replace('+', '/')}]")
         
         result = self.connector.place_order(symbol, order_type, lot_size, sl_price, tp_price, config.MAGIC_NUMBER, comment)
         if result and result.retcode == 10009:
@@ -101,7 +106,10 @@ class TradeManager:
                 self.state["active_trades"].append(result.order)
             self.update_trade_tactic(result.order, tsl_mode)
             return "SUCCESS"
-        return f"ERR_MT5: {result.comment if result else 'Unknown'}"
+        
+        # Trả về chuỗi lỗi để Main UI hứng và hiển thị
+        err_msg = result.comment if result else 'Unknown Error'
+        return f"ERR_MT5: {err_msg}"
 
     def update_running_trades(self, account_type="STANDARD"):
         tsl_status_map = {} 
@@ -131,6 +139,15 @@ class TradeManager:
                                       ("Húp TP" if exit_deal.reason == mt5.DEAL_REASON_TP else "Client Close"))
                             
                             self.log(f"[{'BUY' if exit_deal.type == 1 else 'SELL'} {exit_deal.symbol}] #{ticket} | PnL: {profit:+.2f}$ | Lý do: {reason}")
+                            # Sửa lỗi hiển thị Daily History trong Main.py bằng cách lưu log chi tiết
+                            if "daily_history" not in self.state: self.state["daily_history"] = []
+                            self.state["daily_history"].append({
+                                "time": datetime.now().strftime("%H:%M"),
+                                "symbol": exit_deal.symbol,
+                                "type": "BUY" if exit_deal.type==1 else "SELL",
+                                "profit": profit,
+                                "reason": reason
+                            })
                             append_trade_log(ticket, exit_deal.symbol, "BUY" if exit_deal.type==1 else "SELL", exit_deal.volume, profit, reason)
                             
                     if ticket in self.state["active_trades"]:
@@ -160,7 +177,6 @@ class TradeManager:
         sym_info = mt5.symbol_info(symbol)
         point = sym_info.point if sym_info else 0.00001
         
-        # Lấy mốc 1R (Risk Unit) từ Preset
         preset_name = position.comment.split("_")[1] if (position.comment and "_" in position.comment) else "SCALPING"
         params = config.PRESETS.get(preset_name, config.PRESETS["SCALPING"])
         one_r_dist = entry * (params["SL_PERCENT"] / 100.0)
@@ -170,14 +186,13 @@ class TradeManager:
         curr_r = curr_dist / one_r_dist
         
         candidates = []
-        status_previews = []
+        milestones = [] # Lưu các cột mốc: (khoảng_cách_giá, thông_tin_hiển_thị)
         tsl_cfg = config.TSL_CONFIG
 
         # ---------------------------------------------------------
-        # 1. BREAK-EVEN (BE) - FIXED PRO FEE LOGIC
+        # 1. BREAK-EVEN (BE)
         # ---------------------------------------------------------
         if "BE" in active_modes:
-            # Sửa logic tính Comm: PRO/STANDARD = 0
             comm_rate = 0.0 if account_type in ["PRO", "STANDARD"] else \
                         config.COMMISSION_RATES.get(symbol, config.ACCOUNT_TYPES_CONFIG.get(account_type, {}).get("COMMISSION_PER_LOT", 0.0))
             
@@ -190,31 +205,37 @@ class TradeManager:
 
             be_sl = base + (tsl_cfg.get("BE_OFFSET_POINTS", 0) * point) if is_buy else base - (tsl_cfg.get("BE_OFFSET_POINTS", 0) * point)
             trig_r = tsl_cfg.get("BE_OFFSET_RR", 0.8)
+            trig_p = entry + (one_r_dist * trig_r) if is_buy else entry - (one_r_dist * trig_r)
             
             if curr_r >= trig_r:
                 candidates.append((be_sl, "BE"))
             else:
-                trig_p = entry + (one_r_dist * trig_r) if is_buy else entry - (one_r_dist * trig_r)
-                status_previews.append((1, f"BE | {trig_p:.2f} -> {be_sl:.2f}"))
+                dist_to_trig = abs(current_price - trig_p)
+                milestones.append((dist_to_trig, f"BE | {trig_p:.2f} -> {be_sl:.2f}"))
 
         # ---------------------------------------------------------
-        # 2. STEP R (Logic dời theo n bước)
+        # 2. STEP R (Logic sửa lỗi Step 0)
         # ---------------------------------------------------------
         if "STEP_R" in active_modes:
             sz, rt = tsl_cfg.get("STEP_R_SIZE", 1.0), tsl_cfg.get("STEP_R_RATIO", 0.8)
-            steps = math.floor(curr_r / sz)
+            
+            # FIX: Cảm biến số bước thực tế (không lấy số âm)
+            steps = max(0, math.floor(curr_r / sz))
             
             if steps >= 1:
                 step_sl = entry + (steps * one_r_dist * rt) if is_buy else entry - (steps * one_r_dist * rt)
                 candidates.append((step_sl, f"STEP {steps}"))
             
-            next_step = steps + 1
+            # FIX: Next step luôn >= 1 để tránh Trigger = Entry (Step 0)
+            next_step = int(steps + 1)
             n_trig = entry + (next_step * sz * one_r_dist) if is_buy else entry - (next_step * sz * one_r_dist)
             n_sl = entry + (next_step * one_r_dist * rt) if is_buy else entry - (next_step * one_r_dist * rt)
-            status_previews.append((3, f"Step {next_step} | {n_trig:.2f} -> {n_sl:.2f}"))
+            
+            dist_to_step = abs(current_price - n_trig)
+            milestones.append((dist_to_step, f"Step {next_step} | {n_trig:.2f} -> {n_sl:.2f}"))
 
         # ---------------------------------------------------------
-        # 3. PNL LOCK (Logic theo % vốn)
+        # 3. PNL LOCK
         # ---------------------------------------------------------
         if "PNL" in active_modes:
             acc = self.connector.get_account_info()
@@ -228,14 +249,17 @@ class TradeManager:
                         lock_dist = (acc['balance'] * (lvl[1]/100.0)) / (volume * sym_info.trade_contract_size)
                         best_pnl_sl = entry + lock_dist if is_buy else entry - lock_dist
                     else:
-                        trig_p = entry + ((acc['balance'] * (lvl[0]/100.0)) / (volume * sym_info.trade_contract_size)) if is_buy else \
-                                 entry - ((acc['balance'] * (lvl[0]/100.0)) / (volume * sym_info.trade_contract_size))
-                        status_previews.append((2, f"PnL {lvl[0]}% | {trig_p:.2f}"))
+                        req_profit_usd = acc['balance'] * (lvl[0]/100.0)
+                        trig_p = entry + (req_profit_usd / (volume * sym_info.trade_contract_size)) if is_buy else \
+                                 entry - (req_profit_usd / (volume * sym_info.trade_contract_size))
+                        
+                        dist_to_pnl = abs(current_price - trig_p)
+                        milestones.append((dist_to_pnl, f"PnL {lvl[0]}% | {trig_p:.2f}"))
                         break
                 if best_pnl_sl: candidates.append((best_pnl_sl, "PNL"))
 
         # ---------------------------------------------------------
-        # CHỌN SL TỐT NHẤT & THỰC THI
+        # THỰC THI DỜI SL
         # ---------------------------------------------------------
         valid_moves = []
         for price, rule in candidates:
@@ -249,8 +273,12 @@ class TradeManager:
             self.connector.modify_position(position.ticket, best_move[0], position.tp)
             return f"MOVED {best_move[1]}"
 
-        # Nếu chưa dời, hiển thị mục tiêu quan trọng nhất (Step > PnL > BE)
-        if status_previews:
-            return sorted(status_previews, key=lambda x: x[0], reverse=True)[0][1]
+        # ---------------------------------------------------------
+        # HIỂN THỊ STATUS: CHỌN MỤC TIÊU GẦN NHẤT (PLAN A)
+        # ---------------------------------------------------------
+        if milestones:
+            # Sắp xếp theo khoảng cách giá (distance) tăng dần -> lấy cái nhỏ nhất
+            closest_milestone = sorted(milestones, key=lambda x: x[0])[0][1]
+            return closest_milestone
 
         return "Monitoring..."
