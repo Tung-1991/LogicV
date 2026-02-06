@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/storage_manager.py
-# Updated: Reset theo giờ Config & Ghi log Realtime
+# V8.0: ADD TRADE TACTICS STORAGE
 
 import json
 import os
@@ -59,8 +59,9 @@ def load_state() -> Dict[str, Any]:
         "trades_today_count": 0,
         "losing_streak": 0,
         "active_trades": [],
-        "tsl_disabled_tickets": [],
-        "daily_history": []
+        "tsl_disabled_tickets": [], # (Legacy) Giữ lại để tương thích ngược
+        "daily_history": [],
+        "trade_tactics": {}         # (V8.0) Lưu tactic TSL cho từng lệnh: {ticket: "STEP_R"}
     }
     
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
@@ -72,8 +73,10 @@ def load_state() -> Dict[str, Any]:
         with open(STATE_FILE, "r") as f:
             state = json.load(f)
             
+            # --- Migrations cho version cũ ---
             if "daily_history" not in state: state["daily_history"] = []
             if "tsl_disabled_tickets" not in state: state["tsl_disabled_tickets"] = []
+            if "trade_tactics" not in state: state["trade_tactics"] = {} # Khởi tạo nếu chưa có
 
             # LOGIC NGÀY MỚI (Dùng hàm get_today_str mới)
             current_date = get_today_str()
@@ -96,6 +99,7 @@ def load_state() -> Dict[str, Any]:
                 state["losing_streak"] = 0 
                 state["daily_history"] = [] 
                 state["starting_balance"] = 0.0 
+                # Lưu ý: active_trades và trade_tactics KHÔNG reset vì lệnh có thể treo qua đêm
                 
             return state
     except Exception as e:
