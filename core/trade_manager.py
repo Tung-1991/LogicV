@@ -235,7 +235,7 @@ class TradeManager:
             milestones.append((dist_to_step, f"Step {next_step} | {n_trig:.2f} -> {n_sl:.2f}"))
 
         # ---------------------------------------------------------
-        # 3. PNL LOCK
+        # 3. PNL LOCK (Đã sửa hiển thị Trigger -> SL)
         # ---------------------------------------------------------
         if "PNL" in active_modes:
             acc = self.connector.get_account_info()
@@ -245,19 +245,29 @@ class TradeManager:
                 
                 best_pnl_sl = None
                 for lvl in levels:
+                    # lvl[0] là % Lãi kích hoạt, lvl[1] là % Lãi khoá lại
                     if pnl_pct >= lvl[0]:
+                        # Đã đạt mốc -> Tính SL cần dời ngay
                         lock_dist = (acc['balance'] * (lvl[1]/100.0)) / (volume * sym_info.trade_contract_size)
                         best_pnl_sl = entry + lock_dist if is_buy else entry - lock_dist
                     else:
+                        # Chưa đạt mốc -> Tính toán hiển thị "Tương lai"
+                        # 1. Tính giá Trigger (Giá cần đạt để kích hoạt)
                         req_profit_usd = acc['balance'] * (lvl[0]/100.0)
                         trig_p = entry + (req_profit_usd / (volume * sym_info.trade_contract_size)) if is_buy else \
                                  entry - (req_profit_usd / (volume * sym_info.trade_contract_size))
                         
-                        dist_to_pnl = abs(current_price - trig_p)
-                        milestones.append((dist_to_pnl, f"PnL {lvl[0]}% | {trig_p:.2f}"))
-                        break
-                if best_pnl_sl: candidates.append((best_pnl_sl, "PNL"))
+                        # 2. Tính giá SL tương lai (Nếu chạm Trigger thì SL về đâu?)
+                        future_lock_usd = acc['balance'] * (lvl[1]/100.0)
+                        future_lock_dist = future_lock_usd / (volume * sym_info.trade_contract_size)
+                        target_sl = entry + future_lock_dist if is_buy else entry - future_lock_dist
 
+                        # Hiển thị: Trigger -> Target SL
+                        dist_to_pnl = abs(current_price - trig_p)
+                        milestones.append((dist_to_pnl, f"PnL {lvl[0]}% | {trig_p:.2f} -> {target_sl:.2f}"))
+                        break
+                
+                if best_pnl_sl: candidates.append((best_pnl_sl, "PNL"))
         # ---------------------------------------------------------
         # THỰC THI DỜI SL
         # ---------------------------------------------------------

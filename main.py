@@ -282,7 +282,7 @@ class BotUI(ctk.CTk):
         
         # --- FIXED LAYOUT: Đã thêm stretch=False và tăng Width ---
         # Tổng width ~ 1300px, đủ để thanh scrollbar hiện ra nếu màn hình bé
-        widths = [110, 280, 180, 200, 250, 120, 150, 40]
+        widths = [110, 235, 190, 210, 260, 100, 235, 40]
         anchors= ["center", "w", "center", "center", "center", "center", "w", "center"]
 
         for c, h, w, a in zip(cols, headers, widths, anchors):
