@@ -3,7 +3,7 @@
 # V3.1.0: Config cleaned up & Added Risk per Preset
 
 # === 1. KẾT NỐI & HỆ THỐNG ===
-COIN_LIST = ["BTCUSD", "ETHUSD", "XAUUSD"] # Danh sách coin hiển thị trên UI
+COIN_LIST = ["BTCUSD", "ETHUSD", "XAUUSD", "USOIL", "UKOIL"] # Danh sách coin hiển thị trên UI
 DEFAULT_SYMBOL = "ETHUSD"        # Coin mặc định khi mở bot
 MAGIC_NUMBER = 8888              # ID nhận diện lệnh của Bot
 LOOP_SLEEP_SECONDS = 1           # Tốc độ làm mới vòng lặp (giây)
@@ -25,7 +25,13 @@ MAX_SPREAD_POINTS = 150          # Spread tối đa cho phép (Points)
 
 # === 3. QUẢN LÝ VỐN (GLOBAL) ===
 LOT_SIZE_MODE = "DYNAMIC"        # "FIXED" (Lot cố định) hoặc "DYNAMIC" (Tính theo Risk)
-COMMISSION_RATES = {"BTCUSD": 16.5, "ETHUSD": 1.25} # Phí Comm riêng cho từng Coin (nếu có)
+COMMISSION_RATES = {
+    "BTCUSD": 16.5,   # check qua exness
+    "ETHUSD": 1.25,   # check qua exness
+    "XAUUSD": 7.0,    # Vàng: Raw/Zero thường là $7 (Có tài khoản Zero có thể lên $16)
+    "USOIL": 0.0,     # Dầu: Exness thường miễn phí Comm (chỉ ăn Spread)
+    "UKOIL": 0.0      # Dầu Brent: Tương tự USOIL
+}
 FIXED_LOT_VOLUME = 0.01          # Khối lượng nếu dùng chế độ FIXED
 RISK_PER_TRADE_PERCENT = 0.30    # % Rủi ro mặc định (Fallback nếu Preset ko có)
 RISK_PER_TRADE_USD = 10.0        # $ Rủi ro tối đa (Dự phòng an toàn)
