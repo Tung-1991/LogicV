@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # FILE: core/trade_manager.py
-# V3.1.0: IMPLEMENT DYNAMIC RISK FROM PRESETS
+# V3.2.0: LOGIC UPGRADE - SMART R CALCULATION (REAL SL PRIORITY)
 
 import logging
 import config
@@ -71,8 +71,7 @@ class TradeManager:
         else:
             if sl_distance == 0: return "ERR_CALC_SL"
             
-            # --- [UPDATED] DYNAMIC RISK CALCULATION ---
-            # Lấy Risk % từ Preset, nếu không có thì lấy Default Config
+            # --- DYNAMIC RISK CALCULATION ---
             current_risk_pct = params.get("RISK_PERCENT", config.RISK_PER_TRADE_PERCENT)
             risk_usd = equity * (current_risk_pct / 100.0)
             
@@ -107,7 +106,6 @@ class TradeManager:
             self.update_trade_tactic(result.order, tsl_mode)
             return "SUCCESS"
         
-        # Trả về chuỗi lỗi để Main UI hứng và hiển thị
         err_msg = result.comment if result else 'Unknown Error'
         return f"ERR_MT5: {err_msg}"
 
@@ -139,7 +137,6 @@ class TradeManager:
                                       ("Húp TP" if exit_deal.reason == mt5.DEAL_REASON_TP else "Client Close"))
                             
                             self.log(f"[{'BUY' if exit_deal.type == 1 else 'SELL'} {exit_deal.symbol}] #{ticket} | PnL: {profit:+.2f}$ | Lý do: {reason}")
-                            # Sửa lỗi hiển thị Daily History trong Main.py bằng cách lưu log chi tiết
                             if "daily_history" not in self.state: self.state["daily_history"] = []
                             self.state["daily_history"].append({
                                 "time": datetime.now().strftime("%H:%M"),
@@ -179,14 +176,22 @@ class TradeManager:
         
         preset_name = position.comment.split("_")[1] if (position.comment and "_" in position.comment) else "SCALPING"
         params = config.PRESETS.get(preset_name, config.PRESETS["SCALPING"])
-        one_r_dist = entry * (params["SL_PERCENT"] / 100.0)
+        
+        # --- [UPGRADE V3.2.0] SMART R CALCULATION ---
+        # Ưu tiên lấy R thực tế từ SL trên lệnh (Manual/Edited SL)
+        # Nếu ko có SL (SL=0) mới dùng công thức cũ từ Config
+        if current_sl > 0:
+            one_r_dist = abs(entry - current_sl)
+        else:
+            one_r_dist = entry * (params["SL_PERCENT"] / 100.0)
+            
         if one_r_dist == 0: return "Err R"
 
         curr_dist = current_price - entry if is_buy else entry - current_price
         curr_r = curr_dist / one_r_dist
         
         candidates = []
-        milestones = [] # Lưu các cột mốc: (khoảng_cách_giá, thông_tin_hiển_thị)
+        milestones = [] 
         tsl_cfg = config.TSL_CONFIG
 
         # ---------------------------------------------------------
@@ -214,19 +219,20 @@ class TradeManager:
                 milestones.append((dist_to_trig, f"BE | {trig_p:.2f} -> {be_sl:.2f}"))
 
         # ---------------------------------------------------------
-        # 2. STEP R (Logic sửa lỗi Step 0)
+        # 2. STEP R (Logic nâng cấp theo R thực tế)
         # ---------------------------------------------------------
         if "STEP_R" in active_modes:
             sz, rt = tsl_cfg.get("STEP_R_SIZE", 1.0), tsl_cfg.get("STEP_R_RATIO", 0.8)
             
-            # FIX: Cảm biến số bước thực tế (không lấy số âm)
+            # Tính số bước đã đạt được
             steps = max(0, math.floor(curr_r / sz))
             
             if steps >= 1:
+                # Tính SL mới dựa trên R thực tế (Dời SL lên mức khoá lợi nhuận)
                 step_sl = entry + (steps * one_r_dist * rt) if is_buy else entry - (steps * one_r_dist * rt)
                 candidates.append((step_sl, f"STEP {steps}"))
             
-            # FIX: Next step luôn >= 1 để tránh Trigger = Entry (Step 0)
+            # Tính mốc tiếp theo để hiển thị Status
             next_step = int(steps + 1)
             n_trig = entry + (next_step * sz * one_r_dist) if is_buy else entry - (next_step * sz * one_r_dist)
             n_sl = entry + (next_step * one_r_dist * rt) if is_buy else entry - (next_step * one_r_dist * rt)
@@ -235,7 +241,7 @@ class TradeManager:
             milestones.append((dist_to_step, f"Step {next_step} | {n_trig:.2f} -> {n_sl:.2f}"))
 
         # ---------------------------------------------------------
-        # 3. PNL LOCK (Đã sửa hiển thị Trigger -> SL)
+        # 3. PNL LOCK
         # ---------------------------------------------------------
         if "PNL" in active_modes:
             acc = self.connector.get_account_info()
@@ -245,49 +251,41 @@ class TradeManager:
                 
                 best_pnl_sl = None
                 for lvl in levels:
-                    # lvl[0] là % Lãi kích hoạt, lvl[1] là % Lãi khoá lại
                     if pnl_pct >= lvl[0]:
-                        # Đã đạt mốc -> Tính SL cần dời ngay
                         lock_dist = (acc['balance'] * (lvl[1]/100.0)) / (volume * sym_info.trade_contract_size)
                         best_pnl_sl = entry + lock_dist if is_buy else entry - lock_dist
                     else:
-                        # Chưa đạt mốc -> Tính toán hiển thị "Tương lai"
-                        # 1. Tính giá Trigger (Giá cần đạt để kích hoạt)
                         req_profit_usd = acc['balance'] * (lvl[0]/100.0)
                         trig_p = entry + (req_profit_usd / (volume * sym_info.trade_contract_size)) if is_buy else \
                                  entry - (req_profit_usd / (volume * sym_info.trade_contract_size))
                         
-                        # 2. Tính giá SL tương lai (Nếu chạm Trigger thì SL về đâu?)
-                        future_lock_usd = acc['balance'] * (lvl[1]/100.0)
-                        future_lock_dist = future_lock_usd / (volume * sym_info.trade_contract_size)
-                        target_sl = entry + future_lock_dist if is_buy else entry - future_lock_dist
-
-                        # Hiển thị: Trigger -> Target SL
                         dist_to_pnl = abs(current_price - trig_p)
-                        milestones.append((dist_to_pnl, f"PnL {lvl[0]}% | {trig_p:.2f} -> {target_sl:.2f}"))
+                        milestones.append((dist_to_pnl, f"PnL {lvl[0]}% | {trig_p:.2f}"))
                         break
-                
                 if best_pnl_sl: candidates.append((best_pnl_sl, "PNL"))
+
         # ---------------------------------------------------------
         # THỰC THI DỜI SL
         # ---------------------------------------------------------
         valid_moves = []
         for price, rule in candidates:
             price = round(price / point) * point
+            # Chỉ dời SL theo chiều hướng có lợi (Buy: Tăng, Sell: Giảm)
             if is_buy and price > current_sl + point: valid_moves.append((price, rule))
             elif not is_buy and (current_sl == 0 or price < current_sl - point): valid_moves.append((price, rule))
 
         if valid_moves:
+            # Chọn mức SL tốt nhất (an toàn nhất cho lợi nhuận - cao nhất cho Buy, thấp nhất cho Sell)
             best_move = max(valid_moves, key=lambda x: x[0]) if is_buy else min(valid_moves, key=lambda x: x[0])
             self.log(f"⚡ [TSL] #{position.ticket} [{best_move[1]}] ➔ SL: {best_move[0]}")
             self.connector.modify_position(position.ticket, best_move[0], position.tp)
             return f"MOVED {best_move[1]}"
 
         # ---------------------------------------------------------
-        # HIỂN THỊ STATUS: CHỌN MỤC TIÊU GẦN NHẤT (PLAN A)
+        # HIỂN THỊ STATUS
         # ---------------------------------------------------------
         if milestones:
-            # Sắp xếp theo khoảng cách giá (distance) tăng dần -> lấy cái nhỏ nhất
+            # Sắp xếp theo khoảng cách giá (distance) tăng dần -> lấy cái nhỏ nhất (Mục tiêu gần nhất)
             closest_milestone = sorted(milestones, key=lambda x: x[0])[0][1]
             return closest_milestone
 
