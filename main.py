@@ -719,7 +719,7 @@ class BotUI(ctk.CTk):
 
                 if milestones:
                     closest = sorted(milestones, key=lambda x: x[0])[0][1]
-                    self.lbl_tsl_preview.configure(text=f"Mục tiêu: {closest}")
+                    self.lbl_tsl_preview.configure(text=f"TSL: {closest}")
                 else:
                     self.lbl_tsl_preview.configure(text="TSL: Monitoring...")
 
